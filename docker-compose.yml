@@ -1,0 +1,127 @@
+networks:
+  aimall-net:
+    driver: bridge
+
+services:
+  # ======================== 1. 基础中间件 ========================
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    container_name: aimall-nacos
+    environment:
+      - MODE=standalone
+      - JVM_XMS=512m
+      - JVM_XMX=512m
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    networks:
+      - aimall-net
+    restart: always
+
+  mysql:
+    image: mysql:8.0
+    container_name: aimall-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - aimall-net
+    restart: always
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aimall-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: aimall123
+      POSTGRES_DB: aimall_ai
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    networks:
+      - aimall-net
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: aimall-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - aimall-net
+    restart: always
+
+  sentinel:
+    image: bladex/sentinel-dashboard:1.8.6
+    container_name: aimall-sentinel
+    ports:
+      - "8858:8858"
+    networks:
+      - aimall-net
+    restart: always
+
+  # ======================== 2. 前端 Web 页面 ========================
+  # 后端微服务（gateway/user/product/order/ai）直接在本地 IDEA 中启动
+  # 前端通过 host.docker.internal:8080 反向代理至宿主机本地网关
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aimall-frontend
+    ports:
+      - "3000:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - aimall-net
+    restart: always
+
+  # ======================== 3. 消息队列 RocketMQ ========================
+  rocketmq-namesrv:
+    image: apache/rocketmq:4.9.6
+    container_name: aimall-rocketmq-namesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    environment:
+      - JAVA_OPT_EXT=-Xms256m -Xmx256m -Xmn128m -XX:-UseContainerSupport
+    networks:
+      - aimall-net
+    restart: always
+
+  rocketmq-broker:
+    image: apache/rocketmq:4.9.6
+    container_name: aimall-rocketmq-broker
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/rocketmq-4.9.6/conf/broker.conf
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    environment:
+      - JAVA_OPT_EXT=-Xms256m -Xmx256m -Xmn128m -XX:-UseContainerSupport
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/rocketmq-4.9.6/conf/broker.conf
+    depends_on:
+      - rocketmq-namesrv
+    networks:
+      - aimall-net
+    restart: always
+
+  rocketmq-dashboard:
+    image: apacherocketmq/rocketmq-dashboard:latest
+    container_name: aimall-rocketmq-dashboard
+    ports:
+      - "8089:8082"
+    environment:
+      - JAVA_OPTS=-Drocketmq.namesrv.addr=rocketmq-namesrv:9876 -Xms128m -Xmx256m
+    depends_on:
+      - rocketmq-namesrv
+      - rocketmq-broker
+    networks:
+      - aimall-net
+    restart: always

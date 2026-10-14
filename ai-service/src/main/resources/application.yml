@@ -1,0 +1,79 @@
+server:
+  port: 8084
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: ai-service
+  config:
+    import:
+      - optional:nacos:${spring.application.name}.yaml
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        ip: ${NACOS_REGISTER_IP:127.0.0.1}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        file-extension: yaml
+        import-check:
+          enabled: false
+    sentinel:
+      transport:
+        dashboard: localhost:8858
+        port: 8719
+    openfeign:
+      sentinel:
+        enabled: true
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:localhost}:5432/aimall_ai
+    username: ${PG_USER:postgres}
+    password: ${PG_PASSWORD:aimall123}
+    driver-class-name: org.postgresql.Driver
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+      database: 1
+
+  ai:
+    openai:
+      # 全局配置
+      base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      api-key: ${DASHSCOPE_API_KEY}
+      chat:
+        # 对话模型：阿里云百炼通义千问 qwen3.7-flash (支持 Function Calling 智能调用商品与订单微服务)
+        base-url: ${CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+        api-key: ${DASHSCOPE_API_KEY}
+        options:
+          model: ${CHAT_MODEL:qwen3.7-flash}
+          temperature: 0.7
+          max-tokens: 2048
+      embedding:
+        # 向量嵌入：自动读取你系统中的 DASHSCOPE_API_KEY (阿里云百炼通义千问)
+        base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+        api-key: ${DASHSCOPE_API_KEY}
+        options:
+          model: text-embedding-v3  # 阿里通义千问官方向量模型
+    vectorstore:
+      pgvector:
+        initialize-schema: true   # 首次运行自动建 vector 表
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: 1536           # 通义千问 text-embedding-v3 默认 1536 维度
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+jwt:
+  secret: ${JWT_SECRET:aimall-platform-secret-key-must-be-32-bytes!}
+
+logging:
+  level:
+    com.aimall: DEBUG
+    org.springframework.ai: INFO

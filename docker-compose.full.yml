@@ -1,0 +1,182 @@
+version: '3.8'
+
+networks:
+  aimall-net:
+    driver: bridge
+
+services:
+  # ======================== 1. 基础中间件 ========================
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    container_name: aimall-nacos
+    environment:
+      - MODE=standalone
+      - JVM_XMS=512m
+      - JVM_XMX=512m
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    networks:
+      - aimall-net
+    restart: always
+
+  mysql:
+    image: mysql:8.0
+    container_name: aimall-mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - aimall-net
+    restart: always
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aimall-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: aimall123
+      POSTGRES_DB: aimall_ai
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    networks:
+      - aimall-net
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: aimall-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - aimall-net
+    restart: always
+
+  # ======================== 2. 后端微服务集群 ========================
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: aimall-gateway
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - REDIS_HOST=redis
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+    ports:
+      - "8080:8080"
+    depends_on:
+      - nacos
+      - redis
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: aimall-user
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - MYSQL_HOST=mysql
+      - REDIS_HOST=redis
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+    ports:
+      - "8081:8081"
+    depends_on:
+      - nacos
+      - mysql
+      - redis
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: aimall-product
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - MYSQL_HOST=mysql
+      - REDIS_HOST=redis
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+    ports:
+      - "8082:8082"
+    depends_on:
+      - nacos
+      - mysql
+      - redis
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: aimall-order
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - MYSQL_HOST=mysql
+      - REDIS_HOST=redis
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+    ports:
+      - "8083:8083"
+    depends_on:
+      - nacos
+      - mysql
+      - redis
+      - product-service
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: aimall-ai
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - PG_HOST=postgres
+      - PG_USER=${PG_USER:-postgres}
+      - PG_PASSWORD=${PG_PASSWORD:-aimall123}
+      - REDIS_HOST=redis
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - CHAT_BASE_URL=${CHAT_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode}
+      - CHAT_MODEL=${CHAT_MODEL:-qwen3.7-flash}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode}
+    ports:
+      - "8084:8084"
+    depends_on:
+      - nacos
+      - postgres
+      - redis
+      - product-service
+      - order-service
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  # ======================== 3. 前端现代 Web 页面 ========================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aimall-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - aimall-net
+    restart: always

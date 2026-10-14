@@ -1,0 +1,83 @@
+server:
+  port: 8083
+  tomcat:
+    threads:
+      max: 1000
+      min-spare: 100
+    max-connections: 10000
+    accept-count: 2000
+
+spring:
+  application:
+    name: order-service
+  config:
+    import:
+      - optional:nacos:${spring.application.name}.yaml
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        ip: ${NACOS_REGISTER_IP:127.0.0.1}
+      config:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        file-extension: yaml
+        import-check:
+          enabled: false
+    sentinel:
+      transport:
+        dashboard: ${SENTINEL_DASHBOARD:localhost:8858}
+        port: 8720
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 10000
+            read-timeout: 10000
+      circuitbreaker:
+        enabled: true
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/aimall_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+      database: 2
+
+feign:
+  sentinel:
+    enabled: true
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  pattern:
+    console: "%clr(%d{HH:mm:ss.SSS}){faint} %clr(%-5level){highlight} %clr([%X{traceId:-}]){cyan} %clr([%15.15thread]){faint} %clr(%logger{36}){blue} - %msg%n"
+  level:
+    root: INFO
+    com.aimall: INFO
+    com.alibaba.nacos: WARN
+    org.apache.rocketmq: WARN
+    org.springframework: WARN
+
+seckill:
+  order:
+    cancel-delay-level: 9  # RocketMQ 延迟级别：1=1s, 2=5s, 3=10s, 4=30s, 5=1m, 6=2m, 7=3m, 8=4m, 9=5m, 14=10m (调整为真实电商标准 5 分钟)
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAMESRV:127.0.0.1:9876}
+  producer:
+    group: order-producer-group
+    send-message-timeout: 10000
+    retry-times-when-send-failed: 2
