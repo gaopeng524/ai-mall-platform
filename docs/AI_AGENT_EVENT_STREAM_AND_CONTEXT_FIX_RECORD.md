@@ -35,6 +35,7 @@
   - 移除方法级 `synchronized` 锁，纯依赖 `LongAdder.sumThenReset()` 实现无锁高并发原子刷新，失败时自动重新回灌。
 - **支付服务健全 (`payment-service`)**：
   - 对齐 RocketMQ 2.3.1 客户端版本，开启全局组件扫描并对接 `UserContext`。
+  - **Spring Boot 3.3.x 自动装配适配**：在 `resources/META-INF/spring/` 下补齐 `org.springframework.boot.autoconfigure.AutoConfiguration.imports`（指定 `RocketMQAutoConfiguration`），彻底杜绝 Spring Boot 3 废弃 `spring.factories` 导致无法注入 `RocketMQTemplate` 启动报错的隐患。
 
 ---
 
