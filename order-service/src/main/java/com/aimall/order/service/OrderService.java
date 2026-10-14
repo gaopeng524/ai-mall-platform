@@ -387,21 +387,30 @@ public class OrderService {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(), "已支付订单不能直接取消，请走退款流程");
         }
 
-        // 1. 本地订单状态变更为 CANCELLED
-        order.setStatus("CANCELLED");
-        order.setUpdatedAt(LocalDateTime.now());
-        int rows = orderMapper.updateById(order);
+        // 1. CAS 将本地订单状态从 PENDING 变更为 CANCELLED（防止并发重复取消导致多次归还库存）
+        int rows = orderMapper.update(
+                null,
+                new LambdaUpdateWrapper<Order>()
+                        .eq(Order::getOrderNo, order.getOrderNo())
+                        .eq(Order::getStatus, "PENDING")
+                        .set(Order::getStatus, "CANCELLED")
+                        .set(Order::getUpdatedAt, LocalDateTime.now())
+        );
 
-        // 2. 跨服务 OpenFeign RPC 调用 product-service 归还库存（分布式补偿）
-        try {
-            productRemoteClient.rollbackStock(order.getProductId(), order.getQuantity());
-            productCaffeineCacheService.invalidate(order.getProductId());
-            log.info("[库存补偿成功] 已向 product-service 成功归还商品 {} 的库存 {}", order.getProductId(), order.getQuantity());
-        } catch (Exception e) {
-            log.error("[库存补偿失败] 远程归还库存异常: {}", e.getMessage(), e);
+        if (rows <= 0) {
+            log.info("[取消订单跳过] 订单 {} 状态已发生变更，无需重复取消", order.getOrderNo());
+            return false;
         }
 
-        return rows > 0;
+        // 2. 跨服务 OpenFeign RPC 调用 product-service 归还库存（内部已统一恢复 Redis 与 MySQL 库存）
+        Result<Boolean> rollbackResult = productRemoteClient.rollbackStock(order.getProductId(), order.getQuantity());
+        if (rollbackResult == null || !Boolean.TRUE.equals(rollbackResult.getData())) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(), "归还商品库存失败，请稍后重试");
+        }
+        productCaffeineCacheService.invalidate(order.getProductId());
+        log.info("[库存补偿成功] 已向 product-service 成功归还商品 {} 的库存 {}", order.getProductId(), order.getQuantity());
+
+        return true;
     }
 
     /**
@@ -505,7 +514,7 @@ public class OrderService {
      * 核心设计亮点：
      * 1. CAS 乐观锁防并发竞争：只有当 status == 'PENDING' 时才将 status 置为 'CANCELLED'，
      *    若用户正好在最后一秒完成支付（变为 PAID），CAS 将自然失败 (影响行数 = 0)，绝不误关单！
-     * 2. 分布式最终一致性回滚：若 CAS 关单成功，同步回滚 MySQL 物理库存与 Redis 预扣库存。
+     * 2. 分布式最终一致性回滚：若 CAS 关单成功，由 product-service.rollbackStock 统一原子回滚 Redis 预扣库存与 MySQL 物理库存，避免重复累加。
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean closeOrderIfTimeout(String orderNo, Long productId, Integer quantity) {
@@ -524,22 +533,13 @@ public class OrderService {
         if (updatedRows > 0) {
             log.warn("[超时关单成功] 订单 {} 超时未支付，已自动取消！开始触发库存回滚 (数量: {})", orderNo, quantity);
 
-            // 2. 跨服务回滚 MySQL 实际物理库存（同时清除商品缓存）
-            try {
-                productRemoteClient.rollbackStock(productId, quantity);
-                productCaffeineCacheService.invalidate(productId);
-            } catch (Exception e) {
-                log.error("[超时关单库存补偿异常] 调用 product-service 回滚 MySQL 实际库存失败: {}", e.getMessage(), e);
+            // 2. 跨服务回滚库存（product-service 内部已统一完成 Redis +quantity 与 MySQL +quantity 及缓存清理）
+            Result<Boolean> rollbackResult = productRemoteClient.rollbackStock(productId, quantity);
+            if (rollbackResult == null || !Boolean.TRUE.equals(rollbackResult.getData())) {
+                throw new RuntimeException("调用 product-service 回滚库存失败，触发事务回滚与重试: " + orderNo);
             }
-
-            // 3. 恢复 Redis 内存预扣库存
-            try {
-                String stockKey = STOCK_COUNT_PREFIX + productId;
-                stringRedisTemplate.opsForValue().increment(stockKey, quantity);
-                log.info("[超时库存回滚完毕] 订单 {} 预扣库存已全量恢复: Redis +{}, MySQL +{}", orderNo, quantity, quantity);
-            } catch (Exception e) {
-                log.error("[超时关单 Redis 补偿异常] 回滚 Redis 预扣库存失败: {}", e.getMessage(), e);
-            }
+            productCaffeineCacheService.invalidate(productId);
+            log.info("[超时库存回滚完毕] 订单 {} 库存已由商品服务统一恢复: Redis +{}, MySQL +{}", orderNo, quantity, quantity);
 
             return true;
         } else {

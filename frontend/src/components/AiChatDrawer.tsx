@@ -41,7 +41,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     {
       id: 'welcome',
       role: 'assistant',
-      content: '您好！我是您的智能导购助手“小购” 🤖\n\n我深度整合了商城后台的 **pgvector 向量知识库** 与 **商品/订单微服务**。您可以问我：\n• “帮我推荐一双 500 元以内的跑鞋”\n• “对比一下小米 14 和 iPhone 15 Pro”\n• “直接帮我下单李宁赤兔跑鞋”',
+      content: '您好！我是您的智能导购助手“小购” 🤖\n\n我深度整合了商城后台的 **pgvector 向量知识库** 与 **商品/订单/购物车微服务**。您可以问我：\n• “帮我推荐一双 500 元以内的跑鞋”\n• “对比一下小米 14 和 iPhone 15 Pro”\n• “直接帮我下单李宁赤兔跑鞋”\n• “查一下我的订单，或取消未付款订单”',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
   ]);
@@ -152,12 +152,21 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     );
   };
 
-  const handleClearMemory = () => {
+  const handleClearMemory = async () => {
+    try {
+      const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
+      await fetch(`${targetBase}/api/ai/chat/session/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+    } catch (e) {
+      console.warn('清理后端会话缓存跳过:', e);
+    }
     setMessages([
       {
         id: 'reset',
         role: 'system',
-        content: '会话上下文已重置。您可以开始新的提问。',
+        content: '会话上下文（含 Redis 历史记忆）已重置。您可以开始新的提问。',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
     ]);
@@ -181,11 +190,11 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
             <div className="flex items-center gap-2">
               <h2 className="font-bold text-slate-900 text-sm">小购 · AI 导购 Agent</h2>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                MiMo-2.5-Pro
+                Spring AI Agent
               </span>
             </div>
             <p className="text-[11px] text-slate-500">
-              RAG 通义千问向量检索 • Spring AI Tool Calling
+              Redis 会话记忆 • OpenFeign Tool Calling 实时推流
             </p>
           </div>
         </div>
@@ -194,7 +203,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
           {/* 清除记忆 */}
           <button
             onClick={handleClearMemory}
-            title="清空会话记忆 (Reset ChatMemory)"
+            title="清空会话记忆 (Reset Redis ChatMemory)"
             className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition-colors"
           >
             <Trash2 className="w-4 h-4" />
@@ -302,7 +311,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                       <div className="min-w-0">
                         <div className="font-bold text-xs text-slate-900 truncate">{p.name}</div>
                         <div className="text-xs font-black text-rose-600 mt-0.5">
-                          ¥{p.price.toFixed(2)}
+                          ¥{Number(p.price).toFixed(2)}
                           <span className="text-[10px] text-slate-400 font-normal ml-1">库存:{p.stock}</span>
                         </div>
                       </div>
@@ -343,6 +352,12 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
           className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
         >
           ⚡ 一键购买测试
+        </button>
+        <button
+          onClick={() => handleSend('查询我最近的订单列表')}
+          className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
+        >
+          📦 查询我的订单
         </button>
       </div>
 

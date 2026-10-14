@@ -58,6 +58,36 @@ services:
       - aimall-net
     restart: always
 
+  rocketmq-namesrv:
+    image: apache/rocketmq:4.9.6
+    container_name: aimall-rocketmq-namesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    environment:
+      - JAVA_OPT_EXT=-Xms256m -Xmx256m -Xmn128m -XX:-UseContainerSupport
+    networks:
+      - aimall-net
+    restart: always
+
+  rocketmq-broker:
+    image: apache/rocketmq:4.9.6
+    container_name: aimall-rocketmq-broker
+    command: sh mqbroker -n rocketmq-namesrv:9876 -c /home/rocketmq/rocketmq-4.9.6/conf/broker.conf
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    environment:
+      - JAVA_OPT_EXT=-Xms256m -Xmx256m -Xmn128m -XX:-UseContainerSupport
+    volumes:
+      - ./docker/rocketmq/broker.conf:/home/rocketmq/rocketmq-4.9.6/conf/broker.conf
+    depends_on:
+      - rocketmq-namesrv
+    networks:
+      - aimall-net
+    restart: always
+
   # ======================== 2. 后端微服务集群 ========================
   api-gateway:
     build:
@@ -126,6 +156,7 @@ services:
       - NACOS_ADDR=nacos:8848
       - MYSQL_HOST=mysql
       - REDIS_HOST=redis
+      - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
       - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
     ports:
       - "8083:8083"
@@ -133,7 +164,29 @@ services:
       - nacos
       - mysql
       - redis
+      - rocketmq-broker
       - product-service
+    networks:
+      - aimall-net
+    restart: on-failure
+
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: aimall-payment
+    environment:
+      - NACOS_ADDR=nacos:8848
+      - MYSQL_HOST=mysql
+      - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
+      - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
+    ports:
+      - "8086:8086"
+    depends_on:
+      - nacos
+      - mysql
+      - rocketmq-broker
+      - order-service
     networks:
       - aimall-net
     restart: on-failure

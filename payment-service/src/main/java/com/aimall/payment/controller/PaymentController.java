@@ -1,5 +1,6 @@
 package com.aimall.payment.controller;
 
+import com.aimall.common.context.UserContext;
 import com.aimall.common.result.Result;
 import com.aimall.payment.dto.MockPaySubmitDTO;
 import com.aimall.payment.dto.PayCreateDTO;
@@ -23,7 +24,9 @@ public class PaymentController {
      */
     @PostMapping("/create")
     public Result<PayResultVO> createPayment(@Valid @RequestBody PayCreateDTO dto) {
-        log.info("[收银台唤起] 收到支付请求: orderNo={}, channel={}", dto.getOrderNo(), dto.getPayChannel());
+        dto.setUserId(UserContext.getUserIdOrDefault(dto.getUserId() != null ? dto.getUserId() : 2L));
+        log.info("[收银台唤起] 收到支付请求: orderNo={}, userId={}, channel={}",
+                dto.getOrderNo(), dto.getUserId(), dto.getPayChannel());
         PayResultVO vo = paymentService.createPayment(dto);
         return Result.success("收银台订单创建成功", vo);
     }

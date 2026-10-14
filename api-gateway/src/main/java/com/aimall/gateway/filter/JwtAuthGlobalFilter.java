@@ -14,6 +14,7 @@ import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
+import org.springframework.util.StringUtils;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
@@ -23,7 +24,8 @@ import java.util.List;
 
 /**
  * JWT 全局鉴权过滤器
- * 白名单路径直接放行，其他路径验证 Token 并将用户信息写入 Header 传递给下游
+ * 1. 若请求携带合法的 Authorization Bearer Token，无论是否在白名单中，均解析并向下游透传 X-User-Id / X-Username / X-User-Role；
+ * 2. 若未携带 Token 或 Token 过期，白名单路径放行（支持演示环境免密体验），非白名单路径返回 401。
  */
 @Slf4j
 @Component
@@ -32,7 +34,7 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
     private String secret;
 
-    /** 白名单：无需强制登录拦截的路径（演示环境支持免密查单与快速下单） */
+    /** 白名单：无需强制登录拦截的路径（未登录时支持演示用户兜底体验） */
     private static final List<String> WHITE_LIST = List.of(
             "/api/user/register",
             "/api/user/login",
@@ -50,43 +52,45 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         String path = request.getURI().getPath();
-
-        // 白名单放行
         boolean isWhite = WHITE_LIST.stream().anyMatch(p -> pathMatcher.match(p, path));
+
+        // 1. 优先尝试解析 Authorization Header（确保已登录用户在访问白名单路由时也能正确透传真实身份）
+        String authHeader = request.getHeaders().getFirst("Authorization");
+        if (StringUtils.hasText(authHeader) && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7).trim();
+            if (StringUtils.hasText(token)) {
+                try {
+                    SecretKey key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+                    Claims claims = Jwts.parser().verifyWith(key).build()
+                            .parseSignedClaims(token).getPayload();
+
+                    String userId = claims.getSubject();
+                    String username = claims.get("username", String.class);
+                    String role = claims.get("role", String.class);
+
+                    ServerHttpRequest mutatedRequest = request.mutate()
+                            .header("X-User-Id", userId != null ? userId : "")
+                            .header("X-Username", username != null ? username : "")
+                            .header("X-User-Role", role != null ? role : "")
+                            .build();
+
+                    log.debug("JWT 鉴权通过并透传身份: userId={}, username={}, path={}", userId, username, path);
+                    return chain.filter(exchange.mutate().request(mutatedRequest).build());
+                } catch (JwtException e) {
+                    if (!isWhite) {
+                        return unauthorized(exchange, "Token 无效或已过期");
+                    }
+                    log.debug("白名单路径携带了无效或过期 Token，降级为匿名放行: path={}, reason={}", path, e.getMessage());
+                }
+            }
+        }
+
+        // 2. 未携带有效 Token 时：白名单路径直接放行，非白名单路径拦截
         if (isWhite) {
             return chain.filter(exchange);
         }
 
-        // 获取 Token
-        String authHeader = request.getHeaders().getFirst("Authorization");
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            return unauthorized(exchange, "缺少 Authorization Header");
-        }
-        String token = authHeader.substring(7);
-
-        // 验证 Token
-        Claims claims;
-        try {
-            SecretKey key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
-            claims = Jwts.parser().verifyWith(key).build()
-                    .parseSignedClaims(token).getPayload();
-        } catch (JwtException e) {
-            return unauthorized(exchange, "Token 无效或已过期");
-        }
-
-        // 将用户信息写入 Header，传递给下游服务
-        String userId = claims.getSubject();
-        String username = claims.get("username", String.class);
-        String role = claims.get("role", String.class);
-
-        ServerHttpRequest mutatedRequest = request.mutate()
-                .header("X-User-Id", userId)
-                .header("X-Username", username)
-                .header("X-User-Role", role)
-                .build();
-
-        log.debug("JWT 鉴权通过: userId={}, path={}", userId, path);
-        return chain.filter(exchange.mutate().request(mutatedRequest).build());
+        return unauthorized(exchange, "缺少 Authorization Header");
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String reason) {
@@ -98,6 +102,6 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
 
     @Override
     public int getOrder() {
-        return -100; // 最高优先级
+        return -100; // 高优先级，位于 TraceIdGlobalFilter (-300) 之后
     }
 }

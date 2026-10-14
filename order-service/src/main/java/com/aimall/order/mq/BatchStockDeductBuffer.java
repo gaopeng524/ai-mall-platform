@@ -1,5 +1,6 @@
 package com.aimall.order.mq;
 
+import com.aimall.common.result.Result;
 import com.aimall.order.client.ProductRemoteClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +53,7 @@ public class BatchStockDeductBuffer {
         LongAdder adder = pendingDeductMap.computeIfAbsent(productId, k -> new LongAdder());
         adder.add(quantity);
 
-        // 如果累积量超过阈值，立即异步触发一次刷新
+        // 如果累积量超过阈值，立即触发一次无锁原子提取刷新
         if (adder.sum() >= BATCH_SIZE_THRESHOLD) {
             flushProduct(productId, adder);
         }
@@ -74,8 +75,9 @@ public class BatchStockDeductBuffer {
 
     /**
      * 执行单件商品的批量原子持久化
+     * 依赖 LongAdder.sumThenReset() 原子提取并归零，无需使用 synchronized 阻塞全部消费线程
      */
-    private synchronized void flushProduct(Long productId, LongAdder adder) {
+    private void flushProduct(Long productId, LongAdder adder) {
         long delta = adder.sumThenReset();
         if (delta <= 0) {
             return;
@@ -84,7 +86,11 @@ public class BatchStockDeductBuffer {
         try {
             log.debug("[批量库存合并扣减] 商品 {} 触发批量持久化: 聚合扣减数量 = {} 件 (消除 {} 次 MySQL 行锁争抢)",
                     productId, delta, delta);
-            productRemoteClient.syncDeductStock(productId, (int) delta);
+            Result<Boolean> result = productRemoteClient.syncDeductStock(productId, (int) delta);
+            if (result == null || !result.isSuccess()) {
+                log.warn("[批量库存扣减受阻] 商品 {} 批量扣减 {} 件返回失败/熔断，重新回灌缓冲池等待重试", productId, delta);
+                adder.add(delta);
+            }
         } catch (Exception e) {
             log.error("[批量库存扣减异常] 商品 {} 批量扣减 {} 件失败，重新回灌缓冲池等待重试: {}",
                     productId, delta, e.getMessage(), e);

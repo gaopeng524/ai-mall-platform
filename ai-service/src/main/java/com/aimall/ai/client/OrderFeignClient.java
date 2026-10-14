@@ -3,6 +3,7 @@ package com.aimall.ai.client;
 import com.aimall.common.result.Result;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -24,6 +25,12 @@ public interface OrderFeignClient {
 
     @GetMapping("/order/list")
     Result<List<Map<String, Object>>> getUserOrders(@RequestParam("userId") Long userId);
+
+    @GetMapping("/order/detail/{orderNo}")
+    Result<Map<String, Object>> getOrderDetail(@PathVariable("orderNo") String orderNo);
+
+    @PostMapping("/order/cancel")
+    Result<Boolean> cancelOrder(@RequestParam("orderNo") String orderNo);
 
     @PostMapping("/cart/add")
     Result<Map<String, Object>> addToCart(@RequestBody Map<String, Object> body);
