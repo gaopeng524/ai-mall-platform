@@ -66,9 +66,25 @@ public class ProductService {
                 .eq(Product::getStatus, 1); // 仅查询上架商品
 
         if (StringUtils.hasText(keyword)) {
-            wrapper.and(w -> w.like(Product::getName, keyword)
-                    .or().like(Product::getDescription, keyword)
-                    .or().like(Product::getCategory, keyword));
+            String trimmed = keyword.trim();
+            String[] tokens = trimmed.split("[\\s,，+、]+");
+            if (tokens.length <= 1) {
+                wrapper.and(w -> w.like(Product::getName, trimmed)
+                        .or().like(Product::getDescription, trimmed)
+                        .or().like(Product::getCategory, trimmed));
+            } else {
+                wrapper.and(outer -> {
+                    outer.like(Product::getName, trimmed)
+                            .or().like(Product::getDescription, trimmed);
+                    for (String token : tokens) {
+                        if (StringUtils.hasText(token)) {
+                            outer.or(w -> w.like(Product::getName, token)
+                                    .or().like(Product::getDescription, token)
+                                    .or().like(Product::getCategory, token));
+                        }
+                    }
+                });
+            }
         }
 
         if (maxPrice > 0) {

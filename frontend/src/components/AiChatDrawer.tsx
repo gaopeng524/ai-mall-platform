@@ -11,7 +11,10 @@ import {
   Cpu, 
   ShoppingCart,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Camera,
+  Eye,
+  Image as ImageIcon
 } from 'lucide-react';
 import { ChatMessage, Product } from '../types';
 import { startAiStream } from '../services/aiStream';
@@ -41,15 +44,17 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     {
       id: 'welcome',
       role: 'assistant',
-      content: '您好！我是您的智能导购助手“小购” 🤖\n\n我深度整合了商城后台的 **pgvector 向量知识库** 与 **商品/订单/购物车微服务**。您可以问我：\n• “帮我推荐一双 500 元以内的跑鞋”\n• “对比一下小米 14 和 iPhone 15 Pro”\n• “直接帮我下单李宁赤兔跑鞋”\n• “查一下我的订单，或取消未付款订单”',
+      content: '您好！我是您的智能导购助手“小购” 🤖\n\n我已全面接入 **通义千问 qwen3.7-flash 多模态双智能体系统**：\n• **📷 拍立淘找平替**：点击输入框左侧相机图标上传商品照片，或直接 `Ctrl + V` 粘贴图片截图，AI 自动解构视觉特征并检索库内对标的高性价比平替！\n• **💬 智能导购决策**：“帮我推荐 500 元以内的跑鞋”、“对比小米 14 和 iPhone 15 Pro”\n• **⚡ 交易闭环**：“直接下单李宁赤兔跑鞋”、“查一下我的订单”',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
   ]);
   const [input, setInput] = useState<string>('');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -69,17 +74,61 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     }
   }, [initialPrompt, isOpen]);
 
-  const handleSend = async (textToSend?: string) => {
+  // 处理文件上传选择
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('请选择有效的图片文件 (PNG/JPG/WEBP)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setSelectedImage(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // 支持输入框粘贴剪贴板截图 (Ctrl + V)
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === 'string') {
+              setSelectedImage(reader.result);
+            }
+          };
+          reader.readAsDataURL(file);
+          e.preventDefault();
+          break;
+        }
+      }
+    }
+  };
+
+  const handleSend = async (textToSend?: string, imageToSend?: string | null) => {
+    const currentImage = imageToSend !== undefined ? imageToSend : selectedImage;
     const query = (textToSend || input).trim();
-    if (!query || isStreaming) return;
+    if ((!query && !currentImage) || isStreaming) return;
 
+    const finalQuery = query || (currentImage ? '帮我识别图中的商品，并在商城中推荐同款或高性价比平替' : '');
     setInput('');
+    setSelectedImage(null);
 
-    // 1. 添加用户消息
+    // 1. 添加用户消息（带图片标记）
     const userMessage: ChatMessage = {
       id: Math.random().toString(36).substring(2, 9),
       role: 'user',
-      content: query,
+      content: finalQuery,
+      image: currentImage || undefined,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
@@ -100,7 +149,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     // 3. 启动流式传输
     await startAiStream(
       sessionId,
-      query,
+      finalQuery,
       token,
       gatewayUrl,
       {
@@ -148,8 +197,13 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
           setIsStreaming(false);
         }
       },
-      addLog
+      addLog,
+      currentImage
     );
+  };
+
+  const handleSendPresetImage = (url: string, promptText: string) => {
+    handleSend(promptText, url);
   };
 
   const handleClearMemory = async () => {
@@ -177,24 +231,24 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
   return (
     <div 
       className={`fixed top-0 right-0 h-full z-50 bg-white/95 backdrop-blur-xl border-l border-slate-200 shadow-2xl flex flex-col transition-all duration-300 ${
-        isExpanded ? 'w-full sm:w-[680px]' : 'w-full sm:w-[460px]'
+        isExpanded ? 'w-full sm:w-[720px]' : 'w-full sm:w-[480px]'
       }`}
     >
       {/* 头部标题栏 */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50/50 to-violet-50/50">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50/50 via-purple-50/30 to-violet-50/50">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 flex items-center justify-center text-white shadow-xs">
             <Bot className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="font-bold text-slate-900 text-sm">小购 · AI 导购 Agent</h2>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                Spring AI Agent
+              <h2 className="font-bold text-slate-900 text-sm">小购 · 多模态导购 Agent</h2>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 flex items-center gap-1">
+                <Sparkles className="w-2.5 h-2.5" /> qwen3.7-flash 双智能体
               </span>
             </div>
             <p className="text-[11px] text-slate-500">
-              Redis 会话记忆 • OpenFeign Tool Calling 实时推流
+              视觉解构专家 + 选品风控与交易专家 • 拍立淘找平替
             </p>
           </div>
         </div>
@@ -242,26 +296,49 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
               <span>{msg.timestamp}</span>
             </div>
 
-            {/* 工具调用步骤卡片 (Tool Calling 进度，面试官最爱看这个！) */}
+            {/* 用户上传的多模态图片预览气泡 */}
+            {msg.image && (
+              <div className="mb-2 max-w-[220px] rounded-2xl overflow-hidden border-2 border-indigo-200 shadow-sm">
+                <img
+                  src={msg.image}
+                  alt="用户上传商品图"
+                  className="w-full h-auto object-cover max-h-[180px]"
+                />
+              </div>
+            )}
+
+            {/* 工具调用步骤卡片 (多模态视觉解构 + Tool Calling 进度) */}
             {msg.toolSteps && msg.toolSteps.length > 0 && (
-              <div className="w-full max-w-[90%] mb-2 space-y-1.5">
+              <div className="w-full max-w-[92%] sm:max-w-[85%] mb-2 space-y-1.5">
                 {msg.toolSteps.map((step, idx) => (
                   <div
                     key={idx}
-                    className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs flex items-center justify-between"
+                    className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
+                      step.type === 'visual_analysis'
+                        ? 'bg-gradient-to-r from-purple-50 to-indigo-50/50 border-purple-200'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
                   >
-                    <div className="flex items-center gap-2">
-                      {step.type === 'vector_search' ? (
-                        <Database className="w-4 h-4 text-violet-600" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      {step.type === 'visual_analysis' ? (
+                        <div className="p-1 rounded-lg bg-purple-100 text-purple-700 shrink-0">
+                          <Eye className="w-3.5 h-3.5" />
+                        </div>
+                      ) : step.type === 'vector_search' ? (
+                        <div className="p-1 rounded-lg bg-violet-100 text-violet-700 shrink-0">
+                          <Database className="w-3.5 h-3.5" />
+                        </div>
                       ) : (
-                        <Cpu className="w-4 h-4 text-indigo-600" />
+                        <div className="p-1 rounded-lg bg-indigo-100 text-indigo-700 shrink-0">
+                          <Cpu className="w-3.5 h-3.5" />
+                        </div>
                       )}
-                      <div>
-                        <div className="font-semibold text-slate-800">{step.title}</div>
-                        {step.detail && <div className="text-[11px] text-slate-500">{step.detail}</div>}
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-800 truncate">{step.title}</div>
+                        {step.detail && <div className="text-[11px] text-slate-500 truncate">{step.detail}</div>}
                       </div>
                     </div>
-                    <div>
+                    <div className="shrink-0 ml-2">
                       {step.status === 'running' ? (
                         <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
                       ) : (
@@ -295,7 +372,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
             {msg.embeddedProducts && msg.embeddedProducts.length > 0 && (
               <div className="w-full max-w-[92%] sm:max-w-[85%] mt-2 space-y-2">
                 <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-indigo-600" /> AI 识别并推荐商品卡片：
+                  <Sparkles className="w-3 h-3 text-indigo-600" /> AI 精选与平替推荐卡片：
                 </div>
                 {msg.embeddedProducts.map((p) => (
                   <div
@@ -333,36 +410,84 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部快捷 Prompt 提示词 */}
-      <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/50 flex items-center gap-2 overflow-x-auto scrollbar-none text-xs">
+      {/* 快捷拍立淘 & 提问 Prompt */}
+      <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2 overflow-x-auto scrollbar-none text-xs">
         <button
-          onClick={() => handleSend('推荐一双适合跑步的鞋子，预算500')}
-          className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
+          onClick={() => handleSendPresetImage(
+            'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80',
+            '帮我看看这款 Nike 跑鞋，找找商城有什么高性价比平替'
+          )}
+          className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shrink-0 transition-colors flex items-center gap-1 font-medium shadow-2xs"
         >
-          👟 500元预算跑鞋
+          <Camera className="w-3 h-3" /> 👟 拍立淘跑鞋平替
         </button>
         <button
-          onClick={() => handleSend('对比苹果和小米手机的参数')}
+          onClick={() => handleSendPresetImage(
+            'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80',
+            '识别这款索尼头戴耳机，推荐商城对标的高性价比降噪平替'
+          )}
+          className="px-2.5 py-1 rounded-full bg-white border border-purple-200 text-purple-700 hover:bg-purple-50 shrink-0 transition-colors flex items-center gap-1 font-medium shadow-2xs"
+        >
+          <Camera className="w-3 h-3" /> 🎧 拍立淘耳机平替
+        </button>
+        <button
+          onClick={() => handleSendPresetImage(
+            'https://images.unsplash.com/photo-1587829741301-dc798b83add3?auto=format&fit=crop&w=600&q=80',
+            '识别这款客制化机械键盘，推荐商城性价比平替款'
+          )}
+          className="px-2.5 py-1 rounded-full bg-white border border-amber-200 text-amber-700 hover:bg-amber-50 shrink-0 transition-colors flex items-center gap-1 font-medium shadow-2xs"
+        >
+          <Camera className="w-3 h-3" /> ⌨️ 拍立淘机械键盘
+        </button>
+        <button
+          onClick={() => handleSend('对比小米 14 和苹果 iPhone 15 Pro 的参数和性价比')}
           className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
         >
           📱 手机横向对比
         </button>
         <button
-          onClick={() => handleSend('帮我下单李宁赤兔6跑鞋')}
-          className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
-        >
-          ⚡ 一键购买测试
-        </button>
-        <button
           onClick={() => handleSend('查询我最近的订单列表')}
           className="px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 shrink-0 transition-colors"
         >
-          📦 查询我的订单
+          📦 我的订单
         </button>
       </div>
 
-      {/* 底部输入框 */}
+      {/* 底部输入框与多模态图片上传栏 */}
       <div className="p-4 border-t border-slate-200 bg-white">
+        {/* 图片选中预览条 */}
+        {selectedImage && (
+          <div className="relative inline-flex items-center gap-2 mb-2 p-1.5 pr-3 bg-indigo-50/80 border border-indigo-200 rounded-xl">
+            <img
+              src={selectedImage}
+              alt="待上传图片预览"
+              className="w-12 h-12 rounded-lg object-cover border border-indigo-300 bg-white"
+            />
+            <div className="text-xs text-indigo-900">
+              <div className="font-semibold flex items-center gap-1">
+                <ImageIcon className="w-3.5 h-3.5 text-indigo-600" /> 已就绪商品图片
+              </div>
+              <div className="text-[10px] text-indigo-600">点击发送即可开启拍立淘识图找平替</div>
+            </div>
+            <button
+              onClick={() => setSelectedImage(null)}
+              className="ml-2 w-5 h-5 rounded-full bg-slate-200 hover:bg-rose-500 hover:text-white flex items-center justify-center text-slate-600 transition-colors"
+              title="移除图片"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+
+        {/* 隐藏的文件输入组件 */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept="image/*"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -370,17 +495,35 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
           }}
           className="flex items-center gap-2"
         >
+          {/* 上传图片/拍照按钮 */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isStreaming}
+            title="上传商品照片 / 拍照找平替 (亦支持 Ctrl+V 直接粘贴)"
+            className="p-2.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded-xl border border-slate-200 transition-colors shrink-0 disabled:opacity-50"
+          >
+            <Camera className="w-4 h-4" />
+          </button>
+
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={handlePaste}
             disabled={isStreaming}
-            placeholder={isStreaming ? 'AI 正在回复中...' : '输入需求或商品名称，支持多轮对话...'}
+            placeholder={
+              isStreaming
+                ? '通义千问 qwen3.7-flash 正在思考与选品中...'
+                : selectedImage
+                ? '补充您的找平替要求（如：预算300以内），直接回车发送'
+                : '输入需求或商品，支持直接 Ctrl+V 粘贴图片截图...'
+            }
             className="flex-1 px-4 py-2.5 text-sm bg-slate-100 focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-xl outline-hidden transition-all disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={!input.trim() || isStreaming}
+            disabled={(!input.trim() && !selectedImage) || isStreaming}
             className="p-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl shadow-xs transition-colors shrink-0"
           >
             {isStreaming ? (
@@ -391,10 +534,10 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
           </button>
         </form>
         <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
-          <span>回车发送 • SSE 响应式流</span>
+          <span>支持拍照/上传/截图粘贴 • 毫秒级 SSE 流式推流</span>
           <span className="flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-            微服务网关就绪
+            qwen3.7-flash 双智能体
           </span>
         </div>
       </div>

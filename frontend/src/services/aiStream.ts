@@ -17,7 +17,8 @@ const AI_EVENT_PREFIX = '__AI_EVENT__:';
 
 /**
  * 启动真实 AI 导购流式对话（直接连接后端 Spring Cloud Gateway -> ai-service）
- * 支持解析后端推送的结构化事件：
+ * 支持多模态拍立淘识图与文本对话：
+ * - visual_analysis: Agent 1 (视觉解构专家) 多模态特征提取
  * - tool_step: 实时展示 Tool Calling 执行进度卡片
  * - products: 实时渲染对话内嵌的可交互下单商品卡片
  * - chunk: 保留完整换行与缩进的流式文本块
@@ -33,34 +34,50 @@ export async function startAiStream(
     protocol: 'HTTP/SSE' | 'OpenFeign RPC' | 'Dubbo TCP' | 'pgvector HNSW';
     action: string;
     detail: string;
-  }) => void
+  }) => void,
+  image?: string | null
 ) {
   try {
+    const hasImage = Boolean(image && image.trim().length > 0);
+
     // 1. 记录网关路由转发日志
     onArchitectureLog?.({
       service: 'api-gateway',
       protocol: 'HTTP/SSE',
       action: 'Gateway Forwarding',
-      detail: `GET /api/ai/chat/stream?sessionId=${sessionId} -> lb://ai-service`
+      detail: hasImage 
+        ? `POST /api/ai/chat/stream [多模态拍立淘识图] -> lb://ai-service`
+        : `POST /api/ai/chat/stream [智能导购] -> lb://ai-service`
     });
 
     onArchitectureLog?.({
       service: 'ai-service',
       protocol: 'HTTP/SSE',
-      action: 'SSE Handshake',
-      detail: `握手成功，开始调用 Spring AI ChatClient 与 MallTools ...`
+      action: hasImage ? 'Multimodal Dual-Agent' : 'SSE Handshake',
+      detail: hasImage
+        ? '已激活通义千问 qwen3.7-flash 视觉解构流水线，正在分析商品特征与找平替...'
+        : '握手成功，开始调用 Spring AI ChatClient 与 MallTools ...'
     });
 
-    // 2. 发起真实 SSE 响应式流请求（通过 Vite 代理 /api 或直接连 gatewayUrl）
+    // 2. 发起真实 SSE 响应式流请求（使用 POST 以稳定传输大体积 Base64 图片与请求负载）
     const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-    const url = `${targetBase}/api/ai/chat/stream?sessionId=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(message)}`;
+    const url = `${targetBase}/api/ai/chat/stream`;
+
+    const requestPayload = {
+      sessionId,
+      message,
+      imageBase64: (image && image.startsWith('data:')) ? image : (image && !image.startsWith('http') ? image : undefined),
+      imageUrl: (image && (image.startsWith('http://') || image.startsWith('https://'))) ? image : undefined
+    };
 
     const response = await fetch(url, {
-      method: 'GET',
+      method: 'POST',
       headers: {
         'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-      }
+      },
+      body: JSON.stringify(requestPayload)
     });
 
     if (!response.ok) {
@@ -102,10 +119,13 @@ export async function startAiStream(
                 status: eventObj.status
               });
               if (eventObj.status === 'running') {
+                const isVisual = eventObj.type === 'visual_analysis';
+                const isVector = eventObj.type === 'vector_search';
+                const isProduct = eventObj.type === 'product_query';
                 onArchitectureLog?.({
-                  service: eventObj.type === 'vector_search' ? 'ai-service' : eventObj.type === 'product_query' ? 'product-service' : 'order-service',
-                  protocol: eventObj.type === 'vector_search' ? 'pgvector HNSW' : 'OpenFeign RPC',
-                  action: `AI Tool: ${eventObj.title}`,
+                  service: (isVisual || isVector) ? 'ai-service' : isProduct ? 'product-service' : 'order-service',
+                  protocol: isVisual ? 'HTTP/SSE' : isVector ? 'pgvector HNSW' : 'OpenFeign RPC',
+                  action: isVisual ? `Agent 1: ${eventObj.title}` : `AI Tool: ${eventObj.title}`,
                   detail: eventObj.detail || ''
                 });
               }

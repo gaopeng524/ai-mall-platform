@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: api-gateway
+  codec:
+    max-in-memory-size: 10MB
   config:
     import:
       - optional:nacos:${spring.application.name}.yaml
@@ -67,6 +69,9 @@ spring:
             - Path=/api/ai/**
           filters:
             - StripPrefix=1
+          metadata:
+            response-timeout: 60000
+            connect-timeout: 5000
 
         # 知识库服务
         - id: knowledge-service

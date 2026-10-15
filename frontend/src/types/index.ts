@@ -35,6 +35,7 @@ export interface Order {
 
 export type ToolCallStep = 
   | 'vector_search'       // 检索 pgvector
+  | 'visual_analysis'     // Agent 1 多模态视觉解构
   | 'product_query'       // Feign RPC 查商品
   | 'order_create'        // Feign RPC 创建订单
   | 'done';
@@ -44,6 +45,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
+  image?: string;         // 多模态商品图
   toolSteps?: {
     type: ToolCallStep;
     title: string;
