@@ -25,6 +25,12 @@ spring:
         dashboard: ${SENTINEL_DASHBOARD:localhost:8858}
         port: 8718
     gateway:
+      httpclient:
+        connect-timeout: 10000
+        response-timeout: 180s
+        pool:
+          type: elastic
+          max-idle-time: 30s
       discovery:
         locator:
           enabled: true           # 开启服务发现路由
@@ -70,8 +76,8 @@ spring:
           filters:
             - StripPrefix=1
           metadata:
-            response-timeout: 60000
-            connect-timeout: 5000
+            response-timeout: 180000
+            connect-timeout: 10000
 
         # 知识库服务
         - id: knowledge-service
