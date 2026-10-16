@@ -171,14 +171,48 @@ export async function startAiStream(
       detail: `请求失败: ${err.message || '网关连接超时'}`
     });
 
-    const errorMsg = `\n\n⚠️ 【后端服务未启动或不可达】\n` +
-      `无法连接微服务网关 (${gatewayUrl})。\n` +
-      `请检查：\n` +
-      `1. Docker 基础组件 (Nacos, PG, Redis) 是否运行：docker-compose up -d\n` +
-      `2. api-gateway (8080) 与 ai-service (8084) 是否已启动；\n` +
-      `3. 错误详情: ${err.message}`;
+    // 智能容错降级：杜绝将底层端口号、Docker 调试指令直接暴露给终端消费者
+    const fallbackMsg = `\n\n抱歉亲，AI 导购大脑刚刚开小差或网络稍有拥堵～\n` +
+      `小购已为您调出商城热门推荐与高性价比平替好物（见上方商品推荐卡片），您可以先挑选看看；\n` +
+      `您也可以换个问题或重新发送试一下哦！`;
 
-    callbacks.onChunk(errorMsg);
+    // 智能兜底商品卡片联动（保证 UI 不白屏、导购交易链条不断链）
+    try {
+      const fallbackProducts = [
+        {
+          id: 5,
+          name: '漫步者 (EDIFIER) W820NB 双金标头戴式主动降噪耳机 (高性价比平替)',
+          category: '数码外设',
+          price: 299.0,
+          description: 'Hi-Res 双金标高清认证，-43dB 深度混合主动降噪，零压感专利耳套，50小时超长续航。',
+          imageUrl: 'https://images.unsplash.com/photo-1546435770-a3e426bf472b?auto=format&fit=crop&w=600&q=80',
+          tags: ['平替黑马', '双金标认证', '百元降噪王']
+        },
+        {
+          id: 3,
+          name: '李宁赤兔6 Pro 专业竞速跑步鞋 (性价比平替)',
+          category: '运动鞋',
+          price: 499.0,
+          description: '国产高性价比专业竞速训练鞋，全掌䨻科技中底，滚动感强，透气耐磨，千元内跑鞋平替首选。',
+          imageUrl: 'https://images.unsplash.com/photo-1608231387042-66d1773070a5?auto=format&fit=crop&w=600&q=80',
+          tags: ['千元内首选', '轻量回弹', '平替标杆']
+        },
+        {
+          id: 7,
+          name: '红米 Redmi Buds 5 Pro 真无线降噪耳机 (平替旗舰)',
+          category: '数码外设',
+          price: 399.0,
+          description: '52dB 深度降噪，4kHz 超宽频降噪频宽，圈瓷同轴双单元，LHDC 5.0 高清音频传输。',
+          imageUrl: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?auto=format&fit=crop&w=600&q=80',
+          tags: ['52dB降噪', '同轴双单元', '百元卷王']
+        }
+      ];
+      callbacks.onEmbeddedProducts?.(fallbackProducts as any);
+    } catch (fallbackErr) {
+      console.warn('[AI Stream Fallback Card Error]', fallbackErr);
+    }
+
+    callbacks.onChunk(fallbackMsg);
     callbacks.onError(err);
     callbacks.onComplete();
   }

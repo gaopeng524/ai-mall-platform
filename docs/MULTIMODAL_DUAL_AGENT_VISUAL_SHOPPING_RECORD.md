@@ -149,3 +149,12 @@ flowchart TD
 - **后端编译**：Maven 8 个模块 `test-compile -DskipTests` 全量编译通过（BUILD SUCCESS）。
 - **前端构建**：`pnpm run build` 成功完成 TypeScript 检查与 Vite 打包，产物无异常。
 
+### 4.5 智能容错与多级兜底降级加固（杜绝技术栈端口暴露）
+- **痛点回溯**：
+  在早前测试异常时，前端流式捕获器直接将本地开发调试日志（如 `api-gateway (8080) 与 ai-service (8084) 是否已启动`、`docker-compose up -d` 指令及网关原始 JSON）回显到了用户聊天气泡中，暴露了底层拓扑与端口信息，破坏了终端导购体验。
+- **全链路多级容错降级改造**：
+  1. **Tier 1 (Agent 1 视觉感知层兜底)**：调用异常时自动降级提取基础品类与通用关键词，不中断视觉链路；
+  2. **Tier 2 (Agent 2 后端选品层兜底)**：在 `AiShoppingService` 捕捉到大模型限流、网络抖动或超时等异常时，自动触发 `ProductFeignClient.search` 离线/在售规则选品，通过 `AiToolExecutionContext.emitProducts` 向前端旁路推流真实商品卡片，并返回温和的导购话术，让会话自然流动；
+  3. **Tier 3 (前端网络/网关层兜底)**：在 `aiStream.ts` 中彻底剥离内部技术栈报错，遇到 504/网络断连时，自动向聊天界面推流亲和致歉语，并由前端本地调出预置的热门爆款与平替商品卡片（漫步者 W820NB、李宁赤兔6 Pro、红米 Buds 5 Pro），技术日志仅保留在控制台与架构监控面板，保证 UI 界面永不白屏、交易链条不断链。
+
+

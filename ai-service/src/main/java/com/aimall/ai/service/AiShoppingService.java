@@ -1,5 +1,6 @@
 package com.aimall.ai.service;
 
+import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
 import com.aimall.common.trace.TraceContext;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -33,8 +34,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *    - Agent 1（视觉解构专家）：直连调用通义千问关闭冗余 CoT 深度思考 (enable_thinking: false)，2~3 秒极速产出精准特征 JSON；
  *    - Agent 2（选品风控与交易专家）：挂载 MallTools 9 项微服务能力，根据解构特征搜库、比价、排查无货并生成平替推荐卡片；
  * 2. 毫秒级防超时流式握手：请求一到达立即推送首个 SSE 存活包，让网关立即收到 HTTP 200 响应头，绝不触发 504 Gateway Timeout；
- * 3. Redis + 内存双层会话记忆：滑动窗口裁剪与自动过期；
- * 4. 防越权与全链路追踪：AiToolExecutionContext 绑定网关透传鉴权 userId 与 TraceId。
+ * 3. 多级智能容错降级：大模型或网关异常时自动触发规则选品兜底推荐，绝不暴露底层技术栈与端口号报错；
+ * 4. Redis + 内存双层会话记忆：滑动窗口裁剪与自动过期；
+ * 5. 防越权与全链路追踪：AiToolExecutionContext 绑定网关透传鉴权 userId 与 TraceId。
  */
 @Slf4j
 @Service
@@ -42,6 +44,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class AiShoppingService {
 
     private final ChatClient chatClient;
+    private final ProductFeignClient productFeignClient;
     private final VectorStore vectorStore;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
@@ -229,9 +232,20 @@ public class AiShoppingService {
                 }
                 sink.complete();
             } catch (Exception e) {
-                log.error("[AI Agent 对话异常] {}", e.getMessage(), e);
-                String errText = "【AI 导购遇到问题】" + (e.getMessage() != null ? e.getMessage() : "服务繁忙，请稍后再试");
-                sink.next(AiToolExecutionContext.formatChunkEvent(errText));
+                log.error("[AI Agent 对话异常] 触发智能选品兜底降级: {}", e.getMessage(), e);
+                // 智能容错降级：不向用户暴露技术栈报错，主动进行微服务在售商品兜底推荐
+                try {
+                    String fallbackKeyword = hasImage ? "耳机" : (userPrompt.length() > 6 ? userPrompt.substring(0, 6) : userPrompt);
+                    var fallbackResult = productFeignClient.search(fallbackKeyword, 0.0);
+                    if (fallbackResult != null && fallbackResult.getData() != null && !fallbackResult.getData().isEmpty()) {
+                        AiToolExecutionContext.emitProducts(fallbackResult.getData());
+                    }
+                } catch (Exception ex) {
+                    log.warn("[AI 降级选品 RPC 略过] {}", ex.getMessage());
+                }
+
+                String fallbackText = "抱歉亲，AI 导购大脑刚刚稍微开小差了～不过小购已为您调出商城热销的相关爆款与高性价比平替好物（见上方商品卡片），您可以先挑选看看；您也可以换个描述再问问我哦！";
+                sink.next(AiToolExecutionContext.formatChunkEvent(fallbackText));
                 sink.complete();
             } finally {
                 AiToolExecutionContext.clear(sessionId);
