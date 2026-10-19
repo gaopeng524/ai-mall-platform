@@ -2,6 +2,7 @@ package com.aimall.ai.service;
 
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
+import com.aimall.common.exception.BusinessException;
 import com.aimall.common.trace.TraceContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -72,6 +73,7 @@ public class AiShoppingService {
     private String deepSeekModel;
 
     private static final String REDIS_MEMORY_PREFIX = "ai:chat:memory:";
+    private static final String REDIS_SESSION_OWNER_PREFIX = "ai:chat:session:owner:";
     private static final Duration MEMORY_TTL = Duration.ofMinutes(30);
     private static final int MAX_HISTORY_MESSAGES = 20;
 
@@ -139,11 +141,25 @@ public class AiShoppingService {
         final String userPrompt = (message != null && !message.isBlank()) ? message.trim() : "帮我识别图中的商品，并在商城中推荐同款或高性价比平替";
         final boolean hasImage = (imageData != null && !imageData.isBlank());
 
-        log.info("[AI Agent 对话] sessionId={}, userId={}, traceId={}, hasImage={}, query={}",
-                sessionId, effectiveUserId, traceId, hasImage, userPrompt);
+        // 会话归属防窃取与沙箱隔离：若该 sessionId 已被某一用户绑定，其它用户（或匿名访客）强制沙箱隔离
+        String safeSessionId = (sessionId != null && !sessionId.isBlank()) ? sessionId : "default_session";
+        try {
+            String owner = stringRedisTemplate.opsForValue().get(REDIS_SESSION_OWNER_PREFIX + safeSessionId);
+            if (owner != null && !owner.isBlank()) {
+                if (effectiveUserId == null || !owner.equals(String.valueOf(effectiveUserId))) {
+                    log.warn("[AI Session] 用户 {} 尝试读取归属于用户 {} 的会话 {}，自动沙箱隔离", effectiveUserId, owner, safeSessionId);
+                    safeSessionId = safeSessionId + "_sub_" + (effectiveUserId != null ? effectiveUserId : "guest");
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        final String effectiveSessionId = safeSessionId;
+
+        log.info("[AI Agent 对话] sessionId={}, effectiveSessionId={}, userId={}, traceId={}, hasImage={}, query={}",
+                sessionId, effectiveSessionId, effectiveUserId, traceId, hasImage, userPrompt);
 
         return Flux.create(sink -> {
-            AiToolExecutionContext.bind(sessionId, effectiveUserId, traceId, sink::next);
+            AiToolExecutionContext.bind(effectiveSessionId, effectiveUserId, traceId, sink::next);
             TraceContext.setTraceId(traceId);
 
             try {
@@ -237,7 +253,7 @@ public class AiShoppingService {
                 }
 
                 // 2. 加载会话历史（优先从 Redis 读取）
-                List<Message> history = loadSessionHistory(sessionId);
+                List<Message> history = loadSessionHistory(effectiveSessionId);
 
                 // 3. 语义问句缓存（非图片、首轮会话且非交易操作时检查缓存）
                 boolean isCandidateForCache = !hasImage && history.isEmpty() && !isTransactionalQuery(userPrompt);
@@ -257,7 +273,7 @@ public class AiShoppingService {
                             emitChunkedText(sink, cachedAnswer);
                             history.add(new UserMessage(userPrompt));
                             history.add(new AssistantMessage(cachedAnswer));
-                            saveSessionHistory(sessionId, history);
+                            saveSessionHistory(effectiveSessionId, history, effectiveUserId);
                             sink.complete();
                             return;
                         }
@@ -291,7 +307,7 @@ public class AiShoppingService {
                     }
 
                     // 绑定 ToolContext 防止多线程异步丢失上下文
-                    requestSpec.toolContext(Map.of("sessionId", sessionId));
+                    requestSpec.toolContext(Map.of("sessionId", effectiveSessionId));
 
                     Flux<String> streamFlux = requestSpec
                             .user(actualAgentPrompt)
@@ -377,7 +393,7 @@ public class AiShoppingService {
                 // 9. 保存会话历史至 Redis (记录当前轮用户提问与回答)
                 history.add(new UserMessage(hasImage ? "[拍立淘识别] " + userPrompt : userPrompt));
                 history.add(new AssistantMessage(finalAnswer));
-                saveSessionHistory(sessionId, history);
+                saveSessionHistory(effectiveSessionId, history, effectiveUserId);
 
                 // 10. 写入问句语义缓存（热点导购问句）
                 if (isCandidateForCache && queryCacheKey != null && callSucceeded) {
@@ -394,7 +410,7 @@ public class AiShoppingService {
                 sink.next(AiToolExecutionContext.formatChunkEvent(fallbackText));
                 sink.complete();
             } finally {
-                AiToolExecutionContext.clear(sessionId);
+                AiToolExecutionContext.clear(effectiveSessionId);
                 TraceContext.clear();
             }
         });
@@ -654,9 +670,9 @@ public class AiShoppingService {
     }
 
     /**
-     * 保存会话历史至 Redis（保留最近 20 条消息，30 分钟滑动过期）
+     * 保存会话历史至 Redis（保留最近 20 条消息，30 分钟滑动过期），并记录/刷新 session 属主
      */
-    private void saveSessionHistory(String sessionId, List<Message> history) {
+    private void saveSessionHistory(String sessionId, List<Message> history, Long userId) {
         if (history.size() > MAX_HISTORY_MESSAGES) {
             history = new ArrayList<>(history.subList(history.size() - MAX_HISTORY_MESSAGES, history.size()));
         }
@@ -674,20 +690,40 @@ public class AiShoppingService {
                     objectMapper.writeValueAsString(serializableList),
                     MEMORY_TTL
             );
+            if (userId != null && userId > 0) {
+                stringRedisTemplate.opsForValue().set(
+                        REDIS_SESSION_OWNER_PREFIX + sessionId,
+                        String.valueOf(userId),
+                        MEMORY_TTL
+                );
+            }
         } catch (Exception e) {
             log.debug("[AI Memory] Redis 写入跳过，已保存至本地兜底缓存: {}", e.getMessage());
         }
     }
 
     /**
-     * 清空会话记忆
+     * 清空会话记忆（需校验会话属主或管理员权限）
      */
-    public void clearSession(String sessionId) {
-        fallbackMemoryMap.remove(sessionId);
+    public void clearSession(String sessionId, Long userId, String userRole) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
         try {
+            String owner = stringRedisTemplate.opsForValue().get(REDIS_SESSION_OWNER_PREFIX + sessionId);
+            if (owner != null && !owner.isBlank() && !isAdmin) {
+                if (userId == null || !owner.equals(String.valueOf(userId))) {
+                    throw new BusinessException(403, "无权清除他人的会话记忆");
+                }
+            }
+            stringRedisTemplate.delete(REDIS_SESSION_OWNER_PREFIX + sessionId);
             stringRedisTemplate.delete(REDIS_MEMORY_PREFIX + sessionId);
+        } catch (BusinessException be) {
+            throw be;
         } catch (Exception ignored) {
         }
-        log.info("[AI Agent] 会话已清除: {}", sessionId);
+        fallbackMemoryMap.remove(sessionId);
+        log.info("[AI Agent] 会话已清除: sessionId={}, operatorUserId={}, role={}", sessionId, userId, userRole);
     }
 }

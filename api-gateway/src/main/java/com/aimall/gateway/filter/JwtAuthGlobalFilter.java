@@ -34,15 +34,12 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
     private String secret;
 
-    /** 白名单：无需强制登录拦截的路径（未登录时支持演示用户兜底体验） */
+    /** 白名单：仅公开无需登录拦截的路径（商品浏览、注册登录、公开导购对话） */
     private static final List<String> WHITE_LIST = List.of(
             "/api/user/register",
             "/api/user/login",
-            "/api/product/**",          // 商品列表/详情公开
-            "/api/order/**",            // 订单中心路由放行
-            "/api/cart/**",             // 购物车中心放行
-            "/api/pay/**",              // 支付中心收银台放行
-            "/api/ai/**",               // 导购对话与 Agent 工具流
+            "/api/product/**",          // 商品列表/详情公开浏览
+            "/api/ai/chat/stream",      // AI 智能导购流式对话（支持游客咨询体验）
             "/actuator/**"
     );
 
@@ -68,7 +65,13 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
                     String username = claims.get("username", String.class);
                     String role = claims.get("role", String.class);
 
+                    // 剥离客户端伪造的 X-User-* 头，强制注入经由 JWT 验签合法的用户身份
                     ServerHttpRequest mutatedRequest = request.mutate()
+                            .headers(headers -> {
+                                headers.remove("X-User-Id");
+                                headers.remove("X-Username");
+                                headers.remove("X-User-Role");
+                            })
                             .header("X-User-Id", userId != null ? userId : "")
                             .header("X-Username", username != null ? username : "")
                             .header("X-User-Role", role != null ? role : "")
@@ -85,12 +88,20 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
             }
         }
 
-        // 2. 未携带有效 Token 时：白名单路径直接放行，非白名单路径拦截
+        // 2. 未携带有效 Token 时：
+        // 白名单路径必须彻底剥离客户端请求中可能伪造的 X-User-* 头，杜绝匿名冒充！
         if (isWhite) {
-            return chain.filter(exchange);
+            ServerHttpRequest sanitizedRequest = request.mutate()
+                    .headers(headers -> {
+                        headers.remove("X-User-Id");
+                        headers.remove("X-Username");
+                        headers.remove("X-User-Role");
+                    })
+                    .build();
+            return chain.filter(exchange.mutate().request(sanitizedRequest).build());
         }
 
-        return unauthorized(exchange, "缺少 Authorization Header");
+        return unauthorized(exchange, "缺少 Authorization Header 或 Token 无效");
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String reason) {

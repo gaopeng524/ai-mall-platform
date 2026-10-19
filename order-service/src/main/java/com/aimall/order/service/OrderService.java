@@ -341,20 +341,31 @@ public class OrderService {
     }
 
     /**
-     * 订单在线支付确认（支持 orderId 或 orderNo）
+     * 订单在线支付确认（支持 orderId 或 orderNo，支持校验订单归属）
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean payOrder(Long orderId) {
-        return payOrder(orderId, null);
+        return payOrder(orderId, null, null, null);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public boolean payOrder(Long orderId, String orderNo) {
+        return payOrder(orderId, orderNo, null, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean payOrder(Long orderId, String orderNo, Long userId, String userRole) {
         Order order = findOrder(orderId, orderNo);
         if (order == null) {
             log.warn("[订单支付异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
         }
+
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+            throw new BusinessException(403, "无权支付他人的订单");
+        }
+
         order.setStatus("PAID");
         order.setUpdatedAt(LocalDateTime.now());
         int rows = orderMapper.updateById(order);
@@ -363,19 +374,29 @@ public class OrderService {
     }
 
     /**
-     * 取消订单并触发跨服务库存补偿回滚（支持 orderId 或 orderNo）
+     * 取消订单并触发跨服务库存补偿回滚（支持 orderId 或 orderNo，支持校验订单归属）
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean cancelOrder(Long orderId) {
-        return cancelOrder(orderId, null);
+        return cancelOrder(orderId, null, null, null);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public boolean cancelOrder(Long orderId, String orderNo) {
+        return cancelOrder(orderId, orderNo, null, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean cancelOrder(Long orderId, String orderNo, Long userId, String userRole) {
         Order order = findOrder(orderId, orderNo);
         if (order == null) {
             log.warn("[取消订单异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
+        }
+
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+            throw new BusinessException(403, "无权取消他人的订单");
         }
 
         if ("CANCELLED".equalsIgnoreCase(order.getStatus())) {
@@ -447,14 +468,24 @@ public class OrderService {
     }
 
     /**
-     * 买家确认收货接口：状态流转 SHIPPED/PAID -> DONE (交易完成)
+     * 买家确认收货接口：状态流转 SHIPPED/PAID -> DONE (交易完成，支持校验订单归属)
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean completeOrder(Long orderId, String orderNo) {
+        return completeOrder(orderId, orderNo, null, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean completeOrder(Long orderId, String orderNo, Long userId, String userRole) {
         Order order = findOrder(orderId, orderNo);
         if (order == null) {
             log.warn("[确认收货异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
+        }
+
+        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+            throw new BusinessException(403, "无权确认收货他人的订单");
         }
 
         if ("DONE".equalsIgnoreCase(order.getStatus())) {

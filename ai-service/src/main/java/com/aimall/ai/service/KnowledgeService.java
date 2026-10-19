@@ -8,6 +8,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -16,11 +17,11 @@ import java.util.concurrent.CompletableFuture;
 /**
  * AI 知识库服务（pgvector HNSW 向量索引管理与知识灌库）
  * 
- * 解决痛点：
- * 1. 彻底解决 RAG 链路“只读不写、pgvector 空转”的缺陷；
- * 2. 提供应用启动自动检查与向量灌库（ApplicationRunner 异步热加载）；
- * 3. 注入 24 款商品的“旗舰 vs 平替”专业对比矩阵与交易保障规则知识；
- * 4. 支持联动 product-service 动态拉取在售商品全量同步至向量库。
+ * 核心升级：
+ * 1. 自动适配 1024 维：阿里通义千问 text-embedding-v3 默认 1024 维，自动校验修复旧表历史维度；
+ * 2. 幂等性保障：所有知识片段与在售商品均绑定确定性 ID（如 kb_matrix_*、kb_prod_*），杜绝重复灌库膨胀；
+ * 3. 分批次 Embedding：单批次限制 6 条（远低于 DashScope 10 条上限），杜绝 400 Bad Request 异常；
+ * 4. 启动异步热加载与自检探针。
  */
 @Slf4j
 @Service
@@ -29,6 +30,7 @@ public class KnowledgeService implements ApplicationRunner {
 
     private final VectorStore vectorStore;
     private final ProductFeignClient productFeignClient;
+    private final JdbcTemplate jdbcTemplate;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -44,9 +46,33 @@ public class KnowledgeService implements ApplicationRunner {
     }
 
     /**
+     * 校验并自动修复 pgvector 表结构（针对历史遗留的 1536 维字段自动重置为 1024 维）
+     */
+    public void ensureVectorSchema() {
+        try {
+            String checkSql = """
+                SELECT atttypmod 
+                FROM pg_attribute 
+                WHERE attrelid = 'vector_store'::regclass 
+                  AND attname = 'embedding' 
+                  AND NOT attisdropped;
+            """;
+            Integer typmod = jdbcTemplate.queryForObject(checkSql, Integer.class);
+            if (typmod != null && typmod != 1024) {
+                log.warn("[AI RAG 知识库] 检测到 pgvector 字段维度为 {}，与 text-embedding-v3(1024) 不匹配，正在重置重建表...", typmod);
+                jdbcTemplate.execute("DROP TABLE IF EXISTS vector_store CASCADE;");
+                log.info("[AI RAG 知识库] 维度不匹配的旧表已清理，准备由 PgVectorStore 重新按 1024 维建表");
+            }
+        } catch (Exception e) {
+            log.debug("[AI RAG 知识库] 表结构检测略过: {}", e.getMessage());
+        }
+    }
+
+    /**
      * 启动自检：检查 pgvector 中是否已有知识，若为空则自动灌入默认商品与导购知识库
      */
     public void autoCheckAndInitKnowledgeBase() {
+        ensureVectorSchema();
         try {
             var probeResults = vectorStore.similaritySearch(
                     SearchRequest.builder()
@@ -69,12 +95,14 @@ public class KnowledgeService implements ApplicationRunner {
 
     /**
      * 初始化默认商品矩阵与导购专业知识（旗舰 vs 平替 对标手册 + 交易规则）
+     * 采用确定性 Document ID，实现幂等插入
      */
     public int initDefaultKnowledgeBase() {
         List<Document> docs = new ArrayList<>();
 
         // 1. 运动鞋品类 (Nike Pegasus vs 李宁赤兔6 Pro, 空军一号 vs 回力)
         docs.add(new Document(
+                "kb_matrix_runningshoes",
                 """
                 【专业跑鞋选购与平替知识】
                 - 旗舰标杆：Nike Air Zoom Pegasus 40（售价 ¥799），核心科技为 React 泡棉中底 + 前后掌双 Zoom Air 气垫，适合日常慢跑训练，支撑稳定，重量约 285g。
@@ -87,6 +115,7 @@ public class KnowledgeService implements ApplicationRunner {
 
         // 2. 手机数码 (iPhone 15 Pro vs 小米14, 华为 Mate60 vs 红米 K70)
         docs.add(new Document(
+                "kb_matrix_phones",
                 """
                 【智能手机选购与平替知识】
                 - 旗舰影像标杆：苹果 iPhone 15 Pro（售价 ¥7999），搭载 A17 Pro 3nm 芯片与航空钛金属机身，支持硬件级光追与 ProRes 视频。
@@ -98,6 +127,7 @@ public class KnowledgeService implements ApplicationRunner {
 
         // 3. 降噪耳机 (索尼 WH-1000XM5 vs 漫步者 W820NB, AirPods Pro 2 vs 红米 Buds 5 Pro)
         docs.add(new Document(
+                "kb_matrix_earphones",
                 """
                 【降噪耳机选购与平替知识】
                 - 头戴旗舰标杆：索尼 WH-1000XM5（售价 ¥2999），双芯驱动，8 麦克风主动降噪天花板，LDAC 高解析度传输。
@@ -110,6 +140,7 @@ public class KnowledgeService implements ApplicationRunner {
 
         // 4. 外设与数码穿戴 (罗技 GPW 2 vs 雷柏 VT9 PRO, Keychron vs 达尔优 A98)
         docs.add(new Document(
+                "kb_matrix_peripherals",
                 """
                 【电竞鼠标与机械键盘选购与平替知识】
                 - 旗舰电竞鼠标：罗技 GPW 二代狗屁王（售价 ¥1099），60g 超轻量化设计，HERO 25K 传感器。
@@ -121,6 +152,7 @@ public class KnowledgeService implements ApplicationRunner {
 
         // 5. 户外与冬季穿搭 (北面 1996 vs 波司登, 始祖鸟 Beta AR vs 拓路者雪峰)
         docs.add(new Document(
+                "kb_matrix_outdoor",
                 """
                 【户外硬壳与极寒羽绒选购与平替知识】
                 - 冬季羽绒标杆：北面 (The North Face) 1996 经典羽绒服（售价 ¥2998），美版 700 蓬松度鹅绒。
@@ -132,6 +164,7 @@ public class KnowledgeService implements ApplicationRunner {
 
         // 6. 商城核心业务规则与保障
         docs.add(new Document(
+                "kb_rules_mall",
                 """
                 【AI 电商平台核心交易规则与售后保障】
                 1. 订单支付时效：所有商品下单后进入 PENDING 待支付状态，系统挂载 RocketMQ 延迟消息与 Redis 双通道超时保护，5 分钟未支付将自动关单并自动归还商品库存。
@@ -142,18 +175,12 @@ public class KnowledgeService implements ApplicationRunner {
                 Map.of("category", "平台规则", "type", "faq", "tags", "超时关单,秒杀,库存回滚,购物车")
         ));
 
-        try {
-            vectorStore.add(docs);
-            log.info("[AI RAG 知识库] 成功向 pgvector 写入 {} 条专业商品导购知识切片！", docs.size());
-            return docs.size();
-        } catch (Exception e) {
-            log.error("[AI RAG 知识库] 向量知识写入失败: {}", e.getMessage(), e);
-            return 0;
-        }
+        return batchAddDocuments(docs, 6);
     }
 
     /**
      * 联动 product-service 微服务拉取在售商品，自动转化为知识切片并写入 pgvector
+     * 核心亮点：绑定确定性 ID (kb_prod_{id})，杜绝重复同步导致数据膨胀；采用分批写入杜绝 400 异常
      */
     public int syncFromProductService() {
         try {
@@ -167,11 +194,11 @@ public class KnowledgeService implements ApplicationRunner {
             List<Document> docs = new ArrayList<>();
 
             for (Map<String, Object> p : products) {
+                Object id = p.getOrDefault("id", 0);
                 String name = String.valueOf(p.getOrDefault("name", ""));
                 String category = String.valueOf(p.getOrDefault("category", ""));
                 Object price = p.getOrDefault("price", 0);
                 String desc = String.valueOf(p.getOrDefault("description", ""));
-                Object id = p.getOrDefault("id", 0);
 
                 String content = String.format("""
                         【商城在售商品知识】
@@ -187,15 +214,39 @@ public class KnowledgeService implements ApplicationRunner {
                 metadata.put("category", category);
                 metadata.put("type", "live_product");
 
-                docs.add(new Document(content, metadata));
+                // 核心修复 P0-4：绑定确定性唯一 ID，ON CONFLICT (id) DO UPDATE 保证幂等防重复
+                String docId = "kb_prod_" + id;
+                docs.add(new Document(docId, content, metadata));
             }
 
-            vectorStore.add(docs);
-            log.info("[AI RAG 知识库] 已成功从商品服务同步并 embedding 写入 {} 款在售商品知识！", docs.size());
-            return docs.size();
+            int added = batchAddDocuments(docs, 6);
+            log.info("[AI RAG 知识库] 已成功从商品服务同步并 Embedding 写入 {} 款在售商品知识！", added);
+            return added;
         } catch (Exception e) {
             log.error("[AI RAG 知识库] 同步在售商品向量知识异常: {}", e.getMessage(), e);
             return 0;
         }
+    }
+
+    /**
+     * 按照 batchSize 分批向 pgvector 写入向量，严格遵守 DashScope 批次数量上限 (≤10)
+     */
+    private int batchAddDocuments(List<Document> docs, int batchSize) {
+        if (docs == null || docs.isEmpty()) {
+            return 0;
+        }
+        int totalAdded = 0;
+        for (int i = 0; i < docs.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, docs.size());
+            List<Document> batch = docs.subList(i, end);
+            try {
+                vectorStore.add(batch);
+                totalAdded += batch.size();
+                log.info("[AI RAG 知识库] 分批向量写入完成: batch {}~{}/{}", i + 1, end, docs.size());
+            } catch (Exception e) {
+                log.error("[AI RAG 知识库] 分批写入异常: batch {}~{}, error: {}", i + 1, end, e.getMessage(), e);
+            }
+        }
+        return totalAdded;
     }
 }

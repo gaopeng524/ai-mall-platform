@@ -1,6 +1,7 @@
 package com.aimall.payment.controller;
 
 import com.aimall.common.context.UserContext;
+import com.aimall.common.exception.BusinessException;
 import com.aimall.common.result.Result;
 import com.aimall.payment.dto.MockPaySubmitDTO;
 import com.aimall.payment.dto.PayCreateDTO;
@@ -24,7 +25,14 @@ public class PaymentController {
      */
     @PostMapping("/create")
     public Result<PayResultVO> createPayment(@Valid @RequestBody PayCreateDTO dto) {
-        dto.setUserId(UserContext.getUserIdOrDefault(dto.getUserId() != null ? dto.getUserId() : 2L));
+        Long uid = UserContext.getUserId();
+        if (uid == null) {
+            uid = dto.getUserId();
+        }
+        if (uid == null || uid <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后再唤起收银台");
+        }
+        dto.setUserId(uid);
         log.info("[收银台唤起] 收到支付请求: orderNo={}, userId={}, channel={}",
                 dto.getOrderNo(), dto.getUserId(), dto.getPayChannel());
         PayResultVO vo = paymentService.createPayment(dto);

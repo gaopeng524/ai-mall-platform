@@ -47,14 +47,20 @@ public class CartService {
     private static final long CART_TTL_DAYS = 30;
 
     private String getCartKey(Long userId) {
-        return CART_KEY_PREFIX + (userId != null ? userId : 2L);
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "用户未登录，无法操作购物车");
+        }
+        return CART_KEY_PREFIX + userId;
     }
 
     /**
      * 1. 添加商品到购物车
      */
     public CartVO addToCart(CartAddDTO dto) {
-        Long userId = dto.getUserId() != null ? dto.getUserId() : 2L;
+        Long userId = dto.getUserId();
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后再添加购物车");
+        }
         Long productId = dto.getProductId();
         if (productId == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "商品ID不能为空");
@@ -104,8 +110,10 @@ public class CartService {
      * 2. 获取用户购物车全量数据（聚合最新价格与库存）
      */
     public CartVO getCart(Long userId) {
-        Long uid = userId != null ? userId : 2L;
-        String cartKey = getCartKey(uid);
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后查看购物车");
+        }
+        String cartKey = getCartKey(userId);
         Map<Object, Object> rawEntries = stringRedisTemplate.opsForHash().entries(cartKey);
 
         if (rawEntries.isEmpty()) {
@@ -198,7 +206,10 @@ public class CartService {
      * 3. 修改商品数量
      */
     public CartVO updateQuantity(CartUpdateDTO dto) {
-        Long userId = dto.getUserId() != null ? dto.getUserId() : 2L;
+        Long userId = dto.getUserId();
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后再修改购物车");
+        }
         String cartKey = getCartKey(userId);
         String field = String.valueOf(dto.getProductId());
 
@@ -227,7 +238,10 @@ public class CartService {
      * 4. 切换商品勾选状态 (支持单选与一键全选)
      */
     public CartVO checkItem(CartCheckDTO dto) {
-        Long userId = dto.getUserId() != null ? dto.getUserId() : 2L;
+        Long userId = dto.getUserId();
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后操作购物车");
+        }
         String cartKey = getCartKey(userId);
         boolean targetSelected = Boolean.TRUE.equals(dto.getSelected());
 
@@ -265,25 +279,31 @@ public class CartService {
      * 5. 移除指定商品
      */
     public CartVO removeItem(Long userId, Long productId) {
-        Long uid = userId != null ? userId : 2L;
-        stringRedisTemplate.opsForHash().delete(getCartKey(uid), String.valueOf(productId));
-        return getCart(uid);
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后操作购物车");
+        }
+        stringRedisTemplate.opsForHash().delete(getCartKey(userId), String.valueOf(productId));
+        return getCart(userId);
     }
 
     /**
      * 6. 清空购物车
      */
     public void clearCart(Long userId) {
-        Long uid = userId != null ? userId : 2L;
-        stringRedisTemplate.delete(getCartKey(uid));
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后操作购物车");
+        }
+        stringRedisTemplate.delete(getCartKey(userId));
     }
 
     /**
      * 7. 一键合并结算下单：生成订单并自动清除已结算商品，跳转 5 分钟收银台
      */
     public CartCheckoutVO checkout(Long userId) {
-        Long uid = userId != null ? userId : 2L;
-        CartVO cart = getCart(uid);
+        if (userId == null || userId <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后结算购物车");
+        }
+        CartVO cart = getCart(userId);
 
         List<CartItemVO> selectedItems = cart.getItems().stream()
                 .filter(CartItemVO::getSelected)
@@ -295,12 +315,12 @@ public class CartService {
 
         List<String> createdOrderNos = new ArrayList<>();
         BigDecimal totalAmount = BigDecimal.ZERO;
-        String cartKey = getCartKey(uid);
+        String cartKey = getCartKey(userId);
 
         for (CartItemVO item : selectedItems) {
             try {
                 // 调用普通订单 2PC 分布式事务消息下单（扣减库存、落单、投递 5 分钟延时关单）
-                String orderNo = orderService.createOrder(item.getProductId(), item.getQuantity(), uid, false);
+                String orderNo = orderService.createOrder(item.getProductId(), item.getQuantity(), userId, false);
                 createdOrderNos.add(orderNo);
                 totalAmount = totalAmount.add(item.getSubtotal());
 
@@ -316,7 +336,7 @@ public class CartService {
 
         String primaryOrderNo = createdOrderNos.get(0);
         log.info("[购物车合并结算成功] 用户: {}, 结算商品种类: {}, 生成主单号: {}, 总额: ¥{}",
-                uid, createdOrderNos.size(), primaryOrderNo, totalAmount);
+                userId, createdOrderNos.size(), primaryOrderNo, totalAmount);
 
         return CartCheckoutVO.builder()
                 .orderNos(createdOrderNos)

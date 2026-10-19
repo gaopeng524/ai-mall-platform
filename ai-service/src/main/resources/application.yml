@@ -58,13 +58,13 @@ spring:
         base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
         api-key: ${DASHSCOPE_API_KEY}
         options:
-          model: text-embedding-v3  # 阿里通义千问官方向量模型
+          model: text-embedding-v3  # 阿里通义千问官方向量模型 (默认 1024 维)
     vectorstore:
       pgvector:
         initialize-schema: true   # 首次运行自动建 vector 表
         index-type: HNSW
         distance-type: COSINE_DISTANCE
-        dimensions: 1536           # 通义千问 text-embedding-v3 默认 1536 维度
+        dimensions: 1024           # 阿里通义千问 text-embedding-v3 官方默认 1024 维度 (不支持 1536)
 
 mybatis-plus:
   configuration:

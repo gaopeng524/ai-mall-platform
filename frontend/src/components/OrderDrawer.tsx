@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Order } from '../types';
 import { useConfig } from '../context/ConfigContext';
+import { useAuth } from '../context/AuthContext';
 
 interface OrderDrawerProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ export const OrderDrawer: React.FC<OrderDrawerProps> = ({
   onRefreshOrders,
 }) => {
   const { gatewayUrl, addLog } = useConfig();
+  const { token } = useAuth();
   
   // 状态管理
   const [activeTab, setActiveTab] = useState<OrderTab>('ALL');
@@ -198,10 +200,13 @@ export const OrderDrawer: React.FC<OrderDrawerProps> = ({
     try {
       const res = await fetch(`${gatewayUrl}/api/pay/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           orderNo: order.orderNo,
-          userId: order.userId || 2,
+          userId: order.userId,
           payChannel: payChannel
         })
       });
@@ -243,7 +248,10 @@ export const OrderDrawer: React.FC<OrderDrawerProps> = ({
     try {
       const res = await fetch(`${gatewayUrl}/api/pay/mock-submit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           paySn: payInfo.paySn,
           payPassword: '111111'

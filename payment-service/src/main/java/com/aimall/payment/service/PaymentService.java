@@ -1,5 +1,6 @@
 package com.aimall.payment.service;
 
+import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.exception.ErrorCode;
 import com.aimall.common.result.Result;
@@ -51,6 +52,12 @@ public class PaymentService {
         String orderStatus = String.valueOf(orderData.get("status"));
         BigDecimal totalAmount = new BigDecimal(String.valueOf(orderData.get("totalAmount")));
         Long userId = Long.valueOf(String.valueOf(orderData.get("userId")));
+
+        // 归属校验：非 ADMIN 时不允许为他人订单创建支付流水
+        String role = UserContext.getUserRole();
+        if (dto.getUserId() != null && !"ADMIN".equalsIgnoreCase(role) && !dto.getUserId().equals(userId)) {
+            throw new BusinessException(403, "无权为他人订单发起支付");
+        }
 
         // 2. 状态机前置拦截校验
         if ("PAID".equalsIgnoreCase(orderStatus)) {
@@ -130,6 +137,13 @@ public class PaymentService {
         );
         if (record == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(), "未找到对应支付流水: " + dto.getPaySn());
+        }
+
+        // 归属校验：非 ADMIN 时不允许操作他人支付流水
+        Long currentUserId = UserContext.getUserId();
+        String role = UserContext.getUserRole();
+        if (currentUserId != null && !"ADMIN".equalsIgnoreCase(role) && !currentUserId.equals(record.getUserId())) {
+            throw new BusinessException(403, "无权操作他人的支付流水");
         }
 
         // 幂等校验

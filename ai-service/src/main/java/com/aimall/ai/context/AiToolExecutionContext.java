@@ -78,48 +78,109 @@ public class AiToolExecutionContext {
         TraceContext.clear();
     }
 
+    @FunctionalInterface
+    public interface ToolAction<T> {
+        T execute() throws Exception;
+    }
+
     /**
-     * 获取当前活动上下文（严格基于 ThreadLocal；若在异步线程池中丢失 ThreadLocal 且当前仅有唯一活跃会话时安全恢复，多会话并发时拒绝盲目兜底以杜绝串流与越权风险）
+     * 获取当前活动上下文（严格基于当前线程绑定的 ThreadLocal）
      */
     public static SessionContext getActiveContext() {
-        SessionContext ctx = THREAD_CONTEXT.get();
-        if (ctx != null) {
-            return ctx;
+        return THREAD_CONTEXT.get();
+    }
+
+    /**
+     * 根据显式 sessionId 获取全局注册的会话上下文
+     */
+    public static SessionContext getContextBySessionId(String sessionId) {
+        if (sessionId != null) {
+            return SESSION_REGISTRY.get(sessionId);
         }
-        if (SESSION_REGISTRY.size() == 1) {
-            SessionContext singleCtx = SESSION_REGISTRY.values().iterator().next();
-            THREAD_CONTEXT.set(singleCtx);
-            return singleCtx;
-        }
-        log.warn("[AI Context] 当前执行线程未绑定 SessionContext，且存在多会话并发(count={})，拒绝全局兜底以杜绝串流与越权风险", SESSION_REGISTRY.size());
         return null;
     }
 
     /**
-     * 准备工具执行线程环境并解析有效 UserId
-     * 严格安全规范：未登录用户返回 null，严禁静默兜底至演示账号 2L，防止越权操作他人数据！
+     * 工具执行作用域隔离包装器：
+     * 1. 显式从 Spring AI ToolContext 提取 sessionId，严格从 SESSION_REGISTRY 命中对应会话；
+     * 2. 在执行线程中安全绑定 SessionContext、UserContext 与 TraceContext；
+     * 3. 在 finally 块中强制恢复或清除线程上下文，彻底消灭 Reactor Netty / 线程池复用导致的身份串流与内存泄漏！
      */
-    public static Long prepareToolThreadAndResolveUserId(Long fallbackUserId) {
-        SessionContext ctx = getActiveContext();
-        Long uid = null;
-        if (ctx != null) {
-            uid = ctx.getUserId();
-            if (ctx.getTraceId() != null) {
-                TraceContext.setTraceId(ctx.getTraceId());
+    public static <T> T executeInToolContext(org.springframework.ai.chat.model.ToolContext toolContext, ToolAction<T> action) {
+        String sessionId = null;
+        if (toolContext != null && toolContext.getContext() != null) {
+            Object sid = toolContext.getContext().get("sessionId");
+            if (sid != null) {
+                sessionId = sid.toString();
             }
         }
-        if (uid == null || uid <= 0) {
-            uid = UserContext.getUserId();
+
+        SessionContext targetCtx = null;
+        if (sessionId != null) {
+            targetCtx = SESSION_REGISTRY.get(sessionId);
         }
-        if (uid == null || uid <= 0) {
-            uid = (fallbackUserId != null && fallbackUserId > 0) ? fallbackUserId : null;
+        if (targetCtx == null) {
+            targetCtx = THREAD_CONTEXT.get();
         }
+
+        SessionContext prevCtx = THREAD_CONTEXT.get();
+        UserContext.UserInfo prevUser = UserContext.get();
+        String prevTrace = TraceContext.getTraceId();
+
+        try {
+            if (targetCtx != null) {
+                THREAD_CONTEXT.set(targetCtx);
+                if (targetCtx.getUserId() != null && targetCtx.getUserId() > 0) {
+                    UserContext.set(new UserContext.UserInfo(targetCtx.getUserId(), null, null));
+                } else {
+                    UserContext.clear();
+                }
+                if (targetCtx.getTraceId() != null) {
+                    TraceContext.setTraceId(targetCtx.getTraceId());
+                }
+            } else {
+                THREAD_CONTEXT.remove();
+                UserContext.clear();
+            }
+            return action.execute();
+        } catch (Exception e) {
+            if (e instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new RuntimeException(e);
+        } finally {
+            // 严格在 finally 清理/复原线程上下文，杜绝 Netty 线程复用导致的身份串流
+            if (prevCtx != null) {
+                THREAD_CONTEXT.set(prevCtx);
+            } else {
+                THREAD_CONTEXT.remove();
+            }
+            if (prevUser != null) {
+                UserContext.set(prevUser);
+            } else {
+                UserContext.clear();
+            }
+            if (prevTrace != null) {
+                TraceContext.setTraceId(prevTrace);
+            } else {
+                TraceContext.clear();
+            }
+        }
+    }
+
+    /**
+     * 获取当前工具调用线程的安全认证 UserId（未登录用户返回 null，严禁静默兜底至演示账号 2L）
+     */
+    public static Long getCurrentUserId() {
+        SessionContext ctx = THREAD_CONTEXT.get();
+        if (ctx != null && ctx.getUserId() != null && ctx.getUserId() > 0) {
+            return ctx.getUserId();
+        }
+        Long uid = UserContext.getUserId();
         if (uid != null && uid > 0) {
-            UserContext.set(new UserContext.UserInfo(uid, null, null));
-        } else {
-            UserContext.clear();
+            return uid;
         }
-        return uid;
+        return null;
     }
 
     /**

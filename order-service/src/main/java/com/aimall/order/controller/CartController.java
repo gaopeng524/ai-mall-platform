@@ -1,6 +1,7 @@
 package com.aimall.order.controller;
 
 import com.aimall.common.context.UserContext;
+import com.aimall.common.exception.BusinessException;
 import com.aimall.common.result.Result;
 import com.aimall.order.dto.CartAddDTO;
 import com.aimall.order.dto.CartCheckDTO;
@@ -24,12 +25,24 @@ public class CartController {
 
     private final CartService cartService;
 
+    private Long resolveEffectiveUserId(Long requestedUserId) {
+        Long uid = UserContext.getUserId();
+        if (uid == null) {
+            uid = requestedUserId;
+        }
+        if (uid == null || uid <= 0) {
+            throw new BusinessException(401, "请先登录商城账号后再进行购物车操作");
+        }
+        return uid;
+    }
+
     /**
      * 添加商品到购物车
      */
     @PostMapping("/add")
     public Result<CartVO> addToCart(@RequestBody CartAddDTO dto) {
-        dto.setUserId(UserContext.getUserIdOrDefault(dto.getUserId() != null ? dto.getUserId() : 2L));
+        Long effectiveUserId = resolveEffectiveUserId(dto.getUserId());
+        dto.setUserId(effectiveUserId);
         CartVO cart = cartService.addToCart(dto);
         return Result.success("加入购物车成功", cart);
     }
@@ -39,7 +52,7 @@ public class CartController {
      */
     @GetMapping("/list")
     public Result<CartVO> getCart(@RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(userId != null ? userId : 2L);
+        Long effectiveUserId = resolveEffectiveUserId(userId);
         CartVO cart = cartService.getCart(effectiveUserId);
         return Result.success(cart);
     }
@@ -49,7 +62,8 @@ public class CartController {
      */
     @PostMapping("/update-quantity")
     public Result<CartVO> updateQuantity(@RequestBody CartUpdateDTO dto) {
-        dto.setUserId(UserContext.getUserIdOrDefault(dto.getUserId() != null ? dto.getUserId() : 2L));
+        Long effectiveUserId = resolveEffectiveUserId(dto.getUserId());
+        dto.setUserId(effectiveUserId);
         CartVO cart = cartService.updateQuantity(dto);
         return Result.success("修改数量成功", cart);
     }
@@ -59,7 +73,8 @@ public class CartController {
      */
     @PostMapping("/check")
     public Result<CartVO> checkItem(@RequestBody CartCheckDTO dto) {
-        dto.setUserId(UserContext.getUserIdOrDefault(dto.getUserId() != null ? dto.getUserId() : 2L));
+        Long effectiveUserId = resolveEffectiveUserId(dto.getUserId());
+        dto.setUserId(effectiveUserId);
         CartVO cart = cartService.checkItem(dto);
         return Result.success("状态已更新", cart);
     }
@@ -71,7 +86,7 @@ public class CartController {
     public Result<CartVO> removeItem(
             @RequestParam("productId") Long productId,
             @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(userId != null ? userId : 2L);
+        Long effectiveUserId = resolveEffectiveUserId(userId);
         CartVO cart = cartService.removeItem(effectiveUserId, productId);
         return Result.success("商品已移出购物车", cart);
     }
@@ -81,7 +96,7 @@ public class CartController {
      */
     @PostMapping("/clear")
     public Result<Boolean> clearCart(@RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(userId != null ? userId : 2L);
+        Long effectiveUserId = resolveEffectiveUserId(userId);
         cartService.clearCart(effectiveUserId);
         return Result.success("购物车已清空", true);
     }
@@ -91,7 +106,7 @@ public class CartController {
      */
     @PostMapping("/checkout")
     public Result<CartCheckoutVO> checkout(@RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(userId != null ? userId : 2L);
+        Long effectiveUserId = resolveEffectiveUserId(userId);
         CartCheckoutVO result = cartService.checkout(effectiveUserId);
         return Result.success("结算成功", result);
     }

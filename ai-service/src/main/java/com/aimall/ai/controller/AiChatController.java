@@ -52,11 +52,16 @@ public class AiChatController {
     }
 
     /**
-     * 清除会话上下文（同时清理 Redis 与本地内存缓存）
+     * 清除会话上下文（同时清理 Redis 与本地内存缓存，支持属主与管理员校验）
      */
     @DeleteMapping("/session/{sessionId}")
-    public Result<Void> clearSession(@PathVariable String sessionId) {
-        aiShoppingService.clearSession(sessionId);
+    public Result<Void> clearSession(
+            @PathVariable String sessionId,
+            @RequestHeader(value = "X-User-Id", required = false) Long headerUserId,
+            @RequestHeader(value = "X-User-Role", required = false) String headerUserRole) {
+        Long effectiveUserId = (headerUserId != null && headerUserId > 0) ? headerUserId : UserContext.getUserId();
+        String effectiveUserRole = (headerUserRole != null && !headerUserRole.isBlank()) ? headerUserRole : UserContext.getUserRole();
+        aiShoppingService.clearSession(sessionId, effectiveUserId, effectiveUserRole);
         return Result.success("会话已清除", null);
     }
 }

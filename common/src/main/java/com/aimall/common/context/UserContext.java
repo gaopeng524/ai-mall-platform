@@ -33,6 +33,11 @@ public class UserContext {
         return info != null ? info.username() : null;
     }
 
+    public static String getUserRole() {
+        UserInfo info = CONTEXT.get();
+        return info != null ? info.role() : null;
+    }
+
     public static void clear() {
         CONTEXT.remove();
     }
