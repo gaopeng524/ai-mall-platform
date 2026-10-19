@@ -142,6 +142,10 @@ public class MallTools {
     public Function<CreateOrderRequest, String> createOrder() {
         return request -> {
             Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "创建订单需先登录商城账号", "failed");
+                return "【安全拦截】您当前尚未登录商城账号，请先登录后再进行购买下单操作哦～";
+            }
             int qty = (request.quantity() != null && request.quantity() > 0) ? request.quantity() : 1;
             String detailDesc = String.format("商品ID: %d, 数量: %d, 用户ID: %d", request.productId(), qty, uid);
             AiToolExecutionContext.emitToolStep("order_create", "正在通过事务通道创建订单并锁定库存", detailDesc, "running");
@@ -171,16 +175,20 @@ public class MallTools {
     public Function<UserOrdersRequest, String> getUserOrders() {
         return request -> {
             Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
-            AiToolExecutionContext.emitToolStep("order_create", "正在查询用户订单列表", "用户ID: " + uid, "running");
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("order_query", "操作拦截：用户未登录", "查看历史订单需先登录", "failed");
+                return "您当前尚未登录商城账号，请登录后查看您的个人历史订单记录～";
+            }
+            AiToolExecutionContext.emitToolStep("order_query", "正在查询用户订单列表", "用户ID: " + uid, "running");
             log.info("[AI Tool] getUserOrders: userId={}", uid);
             try {
                 var result = orderFeignClient.getUserOrders(uid);
                 if (result == null || result.getData() == null || result.getData().isEmpty()) {
-                    AiToolExecutionContext.emitToolStep("order_create", "订单查询完成（暂无记录）", "用户ID: " + uid, "success");
+                    AiToolExecutionContext.emitToolStep("order_query", "订单查询完成（暂无记录）", "用户ID: " + uid, "success");
                     return "当前用户暂无订单记录";
                 }
                 List<Map<String, Object>> orders = result.getData();
-                AiToolExecutionContext.emitToolStep("order_create",
+                AiToolExecutionContext.emitToolStep("order_query",
                         "已查询到 " + orders.size() + " 笔订单", "用户ID: " + uid, "success");
                 return orders.stream()
                         .limit(10)
@@ -190,7 +198,7 @@ public class MallTools {
                         .collect(Collectors.joining("\n"));
             } catch (Exception e) {
                 log.error("查询订单失败", e);
-                AiToolExecutionContext.emitToolStep("order_create", "查询订单列表失败", e.getMessage(), "failed");
+                AiToolExecutionContext.emitToolStep("order_query", "查询订单列表失败", e.getMessage(), "failed");
                 return "订单查询失败";
             }
         };
@@ -202,23 +210,23 @@ public class MallTools {
         return request -> {
             AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
             String orderNo = request.orderNo() != null ? request.orderNo().trim() : "";
-            AiToolExecutionContext.emitToolStep("order_create", "正在查询订单明细", "订单号: " + orderNo, "running");
+            AiToolExecutionContext.emitToolStep("order_query", "正在查询订单明细", "订单号: " + orderNo, "running");
             log.info("[AI Tool] getOrderDetail: orderNo={}", orderNo);
             try {
                 var result = orderFeignClient.getOrderDetail(orderNo);
                 if (result == null || result.getData() == null) {
-                    AiToolExecutionContext.emitToolStep("order_create", "未找到该订单", "订单号: " + orderNo, "failed");
+                    AiToolExecutionContext.emitToolStep("order_query", "未找到该订单", "订单号: " + orderNo, "failed");
                     return "未找到订单号为 " + orderNo + " 的订单";
                 }
                 Map<String, Object> o = result.getData();
-                AiToolExecutionContext.emitToolStep("order_create",
+                AiToolExecutionContext.emitToolStep("order_query",
                         "订单状态: " + o.get("status"), "订单号: " + orderNo, "success");
                 return String.format("订单号: %s, 商品: %s, 数量: %s, 总金额: ¥%s, 当前状态: %s, 创建时间: %s",
                         o.get("orderNo"), o.get("productName"), o.get("quantity"),
                         o.get("totalAmount"), o.get("status"), o.get("createdAt"));
             } catch (Exception e) {
                 log.error("查询订单明细异常", e);
-                AiToolExecutionContext.emitToolStep("order_create", "查询订单明细异常", e.getMessage(), "failed");
+                AiToolExecutionContext.emitToolStep("order_query", "查询订单明细异常", e.getMessage(), "failed");
                 return "查询订单明细失败: " + e.getMessage();
             }
         };
@@ -228,22 +236,26 @@ public class MallTools {
     @Description("取消指定的未支付(PENDING)订单并自动归还商品库存。当用户明确要求取消某笔订单时调用。")
     public Function<CancelOrderRequest, String> cancelOrder() {
         return request -> {
-            AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
+            Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "取消订单需先登录商城账号", "failed");
+                return "【安全拦截】您当前尚未登录商城账号，请先登录后再进行取消订单操作哦～";
+            }
             String orderNo = request.orderNo() != null ? request.orderNo().trim() : "";
-            AiToolExecutionContext.emitToolStep("order_create", "正在执行 CAS 取消订单并回滚库存", "订单号: " + orderNo, "running");
-            log.info("[AI Tool] cancelOrder: orderNo={}", orderNo);
+            AiToolExecutionContext.emitToolStep("order_cancel", "正在执行 CAS 取消订单并回滚库存", "订单号: " + orderNo, "running");
+            log.info("[AI Tool] cancelOrder: orderNo={}, userId={}", orderNo, uid);
             try {
                 var result = orderFeignClient.cancelOrder(orderNo);
                 if (result != null && result.isSuccess() && Boolean.TRUE.equals(result.getData())) {
-                    AiToolExecutionContext.emitToolStep("order_create", "订单已取消，库存已归还", "订单号: " + orderNo, "success");
+                    AiToolExecutionContext.emitToolStep("order_cancel", "订单已取消，库存已归还", "订单号: " + orderNo, "success");
                     return "订单 " + orderNo + " 已成功取消，锁定的商品库存已自动归还。";
                 }
                 String msg = result != null ? result.getMessage() : "订单状态不支持取消";
-                AiToolExecutionContext.emitToolStep("order_create", "取消订单未成功", msg, "failed");
+                AiToolExecutionContext.emitToolStep("order_cancel", "取消订单未成功", msg, "failed");
                 return "取消订单失败：" + msg;
             } catch (Exception e) {
                 log.error("取消订单异常", e);
-                AiToolExecutionContext.emitToolStep("order_create", "取消订单异常", e.getMessage(), "failed");
+                AiToolExecutionContext.emitToolStep("order_cancel", "取消订单异常", e.getMessage(), "failed");
                 return "取消订单失败: " + e.getMessage();
             }
         };
@@ -254,9 +266,13 @@ public class MallTools {
     public Function<AddToCartRequest, String> addToCart() {
         return request -> {
             Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "加购需先登录商城账号", "failed");
+                return "【安全拦截】您当前尚未登录商城账号，请先登录后再将商品加入购物车哦～";
+            }
             int qty = request.quantity() != null && request.quantity() > 0 ? request.quantity() : 1;
-            String detailDesc = String.format("商品ID: %d, 数量: %d", request.productId(), qty);
-            AiToolExecutionContext.emitToolStep("order_create", "正在将商品加入 Redis 购物车", detailDesc, "running");
+            String detailDesc = String.format("商品ID: %d, 数量: %d, 用户ID: %d", request.productId(), qty, uid);
+            AiToolExecutionContext.emitToolStep("cart_add", "正在将商品加入 Redis 购物车", detailDesc, "running");
             log.info("[AI Tool] addToCart: productId={}, quantity={}, userId={}",
                     request.productId(), qty, uid);
             try {
@@ -267,15 +283,15 @@ public class MallTools {
                 );
                 var result = orderFeignClient.addToCart(body);
                 if (result != null && result.isSuccess()) {
-                    AiToolExecutionContext.emitToolStep("order_create", "成功加入购物车", detailDesc, "success");
+                    AiToolExecutionContext.emitToolStep("cart_add", "成功加入购物车", detailDesc, "success");
                     return "成功将商品（ID: " + request.productId() + "，数量: " + qty + "）加入购物车！";
                 }
                 String msg = result != null ? result.getMessage() : "服务异常";
-                AiToolExecutionContext.emitToolStep("order_create", "加入购物车失败", msg, "failed");
+                AiToolExecutionContext.emitToolStep("cart_add", "加入购物车失败", msg, "failed");
                 return "加入购物车失败：" + msg;
             } catch (Exception e) {
                 log.error("加入购物车异常", e);
-                AiToolExecutionContext.emitToolStep("order_create", "加入购物车异常", e.getMessage(), "failed");
+                AiToolExecutionContext.emitToolStep("cart_add", "加入购物车异常", e.getMessage(), "failed");
                 return "加入购物车失败: " + e.getMessage();
             }
         };
@@ -286,22 +302,43 @@ public class MallTools {
     public Function<GetCartRequest, String> getCartList() {
         return request -> {
             Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
-            AiToolExecutionContext.emitToolStep("product_query", "正在读取用户 Redis 购物车", "用户ID: " + uid, "running");
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("cart_query", "操作拦截：用户未登录", "查看购物车需先登录商城账号", "failed");
+                return "您当前尚未登录商城账号，请登录后查看您的购物车～";
+            }
+            AiToolExecutionContext.emitToolStep("cart_query", "正在读取用户 Redis 购物车", "用户ID: " + uid, "running");
             log.info("[AI Tool] getCartList: userId={}", uid);
             try {
                 var result = orderFeignClient.getCartList(uid);
                 if (result == null || result.getData() == null) {
-                    AiToolExecutionContext.emitToolStep("product_query", "购物车为空", "用户ID: " + uid, "success");
+                    AiToolExecutionContext.emitToolStep("cart_query", "购物车为空", "用户ID: " + uid, "success");
                     return "购物车暂无商品";
                 }
                 Map<String, Object> cart = result.getData();
-                AiToolExecutionContext.emitToolStep("product_query",
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> items = (List<Map<String, Object>>) cart.get("items");
+                if (items == null || items.isEmpty()) {
+                    AiToolExecutionContext.emitToolStep("cart_query", "购物车为空", "用户ID: " + uid, "success");
+                    return "购物车暂无商品";
+                }
+                AiToolExecutionContext.emitToolStep("cart_query",
                         "购物车共 " + cart.getOrDefault("totalCount", 0) + " 件商品",
                         "已选总额: ¥" + cart.getOrDefault("totalAmount", 0), "success");
-                return cart.toString();
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.format("购物车汇总：共 %s 件商品，已选 %s 件，已选总计 ¥%s\n商品明细：\n",
+                        cart.getOrDefault("totalCount", 0),
+                        cart.getOrDefault("selectedCount", 0),
+                        cart.getOrDefault("totalAmount", 0)));
+                for (Map<String, Object> item : items) {
+                    sb.append(String.format("- 商品: %s | 单价: ¥%s | 数量: %s | 小计: ¥%s | 状态: %s\n",
+                            item.get("productName"), item.get("price"), item.get("quantity"),
+                            item.get("subtotal"), Boolean.TRUE.equals(item.get("selected")) ? "已勾选" : "未勾选"));
+                }
+                return sb.toString();
             } catch (Exception e) {
                 log.error("查询购物车异常", e);
-                AiToolExecutionContext.emitToolStep("product_query", "查询购物车异常", e.getMessage(), "failed");
+                AiToolExecutionContext.emitToolStep("cart_query", "查询购物车异常", e.getMessage(), "failed");
                 return "查询购物车失败: " + e.getMessage();
             }
         };
@@ -312,6 +349,10 @@ public class MallTools {
     public Function<CheckoutCartRequest, String> checkoutCart() {
         return request -> {
             Long uid = AiToolExecutionContext.prepareToolThreadAndResolveUserId(null);
+            if (uid == null || uid <= 0) {
+                AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "结算购物车需先登录商城账号", "failed");
+                return "【安全拦截】您当前尚未登录商城账号，请先登录后再结算购物车哦～";
+            }
             AiToolExecutionContext.emitToolStep("order_create", "正在合并结算购物车已选商品", "用户ID: " + uid, "running");
             log.info("[AI Tool] checkoutCart: userId={}", uid);
             try {

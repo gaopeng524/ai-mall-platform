@@ -27,8 +27,7 @@ public class AiChatController {
     public Flux<String> streamPost(
             @RequestBody AiChatRequest request,
             @RequestHeader(value = "X-User-Id", required = false) Long headerUserId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(
-                (headerUserId != null && headerUserId > 0) ? headerUserId : 2L);
+        Long effectiveUserId = (headerUserId != null && headerUserId > 0) ? headerUserId : UserContext.getUserId();
         String imageData = request != null ? request.getEffectiveImageData() : null;
         String message = (request != null && request.getMessage() != null) ? request.getMessage() : "";
         String sessionId = (request != null && request.getSessionId() != null) ? request.getSessionId() : "default_session";
@@ -47,8 +46,7 @@ public class AiChatController {
             @RequestParam(value = "imageUrl", required = false) String imageUrl,
             @RequestParam(value = "imageBase64", required = false) String imageBase64,
             @RequestHeader(value = "X-User-Id", required = false) Long headerUserId) {
-        Long effectiveUserId = UserContext.getUserIdOrDefault(
-                (headerUserId != null && headerUserId > 0) ? headerUserId : 2L);
+        Long effectiveUserId = (headerUserId != null && headerUserId > 0) ? headerUserId : UserContext.getUserId();
         String imageData = (imageBase64 != null && !imageBase64.isBlank()) ? imageBase64 : imageUrl;
         return aiShoppingService.chat(sessionId, effectiveUserId, message, imageData);
     }

@@ -101,7 +101,7 @@ public class AiShoppingService {
             行为准则：
             - 回答专业、亲切、客观，多维度对比正品与性价比『平替款』的价格、材质与核心体验差异。
             - 严禁凭空捏造商品 ID、价格或订单号，所有商品必须通过微服务工具获取。
-            - 当前已认证用户 ID 为 %d（所有工具已由系统底层自动绑定该身份）。
+            - 权限与身份约束：%s
             """;
 
     /**
@@ -115,7 +115,7 @@ public class AiShoppingService {
      * 流式导购对话主入口（支持图片多模态拍立淘与纯文本对话）
      */
     public Flux<String> chat(String sessionId, Long userId, String message, String imageData) {
-        final Long effectiveUserId = (userId != null && userId > 0) ? userId : 2L;
+        final Long effectiveUserId = (userId != null && userId > 0) ? userId : null;
         final String traceId = TraceContext.initOrGetTraceId(TraceContext.getTraceId());
         final String userPrompt = (message != null && !message.isBlank()) ? message.trim() : "帮我识别图中的商品，并在商城中推荐同款或高性价比平替";
         final boolean hasImage = (imageData != null && !imageData.isBlank());
@@ -182,18 +182,28 @@ public class AiShoppingService {
 
                 // 2. 加载会话历史（优先从 Redis 读取）
                 List<Message> history = loadSessionHistory(sessionId);
-                history.add(new UserMessage(hasImage ? "[拍立淘识别] " + userPrompt : userPrompt));
 
                 // 3. 辅助 RAG：检索向量库背景知识
                 String ragContext = retrieveContext(actualAgentPrompt);
 
                 // 4. 组装 Agent 2 System Prompt
-                String systemPrompt = SYSTEM_PROMPT.formatted(effectiveUserId)
+                String userAuthDesc = (effectiveUserId != null && effectiveUserId > 0)
+                        ? "当前已认证用户 ID 为 " + effectiveUserId + "（所有交易工具已自动绑定该身份）。"
+                        : "当前用户状态为【未登录访客】。用户可以自由浏览与咨询商品信息；但当用户要求加购物车、结算下单或查询个人订单时，工具将进行安全拦截，你应当亲切提示用户【请先登录商城账号】。";
+
+                String systemPrompt = SYSTEM_PROMPT.formatted(userAuthDesc)
                         + (ragContext.isEmpty() ? "" : "\n\n【商品知识库参考】\n" + ragContext);
 
                 // 5. 调用 Agent 2 (选品风控与交易专家) 执行 Function Calling
-                String response = chatClient.prompt()
-                        .system(systemPrompt)
+                var requestSpec = chatClient.prompt()
+                        .system(systemPrompt);
+
+                // 【核心修复 P0-1】：真正将裁剪后的多轮历史记忆传入请求，杜绝模型失忆
+                if (history != null && !history.isEmpty()) {
+                    requestSpec.messages(history);
+                }
+
+                String response = requestSpec
                         .user(actualAgentPrompt)
                         .functions(
                                 "searchProducts",
@@ -213,7 +223,8 @@ public class AiShoppingService {
                     response = "已为您检索到相关商品，详情请查看上方的商品推荐卡片～";
                 }
 
-                // 6. 保存会话历史至 Redis
+                // 6. 保存会话历史至 Redis (记录当前轮用户提问与回答)
+                history.add(new UserMessage(hasImage ? "[拍立淘识别] " + userPrompt : userPrompt));
                 history.add(new AssistantMessage(response));
                 saveSessionHistory(sessionId, history);
 
@@ -273,6 +284,7 @@ public class AiShoppingService {
             Map<String, Object> requestBody = Map.of(
                     "model", (chatModel != null && !chatModel.isBlank()) ? chatModel : "qwen3.7-flash",
                     "enable_thinking", false,
+                    "response_format", Map.of("type", "json_object"),
                     "messages", List.of(
                             Map.of("role", "system", "content", VISUAL_AGENT_SYSTEM_PROMPT),
                             Map.of("role", "user", "content", List.of(

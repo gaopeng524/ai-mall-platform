@@ -39,9 +39,8 @@ public class AiToolExecutionContext {
     /** 线程本地上下文绑定（支持父子线程继承） */
     private static final ThreadLocal<SessionContext> THREAD_CONTEXT = new InheritableThreadLocal<>();
 
-    /** 会话全局注册表（针对跨线程调度但未继承 ThreadLocal 的场景提供基于最近会话的兜底） */
+    /** 会话全局注册表（针对显式 sessionId 检索提供映射） */
     private static final Map<String, SessionContext> SESSION_REGISTRY = new ConcurrentHashMap<>();
-    private static volatile SessionContext LATEST_SESSION = null;
 
     /**
      * 绑定当前 SSE 会话上下文
@@ -57,9 +56,10 @@ public class AiToolExecutionContext {
         if (sessionId != null) {
             SESSION_REGISTRY.put(sessionId, ctx);
         }
-        LATEST_SESSION = ctx;
-        if (userId != null) {
+        if (userId != null && userId > 0) {
             UserContext.set(new UserContext.UserInfo(userId, null, null));
+        } else {
+            UserContext.clear();
         }
         if (traceId != null) {
             TraceContext.setTraceId(traceId);
@@ -74,26 +74,25 @@ public class AiToolExecutionContext {
         if (sessionId != null) {
             SESSION_REGISTRY.remove(sessionId);
         }
-        if (LATEST_SESSION != null && sessionId != null && sessionId.equals(LATEST_SESSION.getSessionId())) {
-            LATEST_SESSION = null;
-        }
         UserContext.clear();
         TraceContext.clear();
     }
 
     /**
-     * 获取当前活动上下文
+     * 获取当前活动上下文（严格基于 ThreadLocal，无上下文时绝不跨会话兜底以防止多用户并发串流与越权）
      */
     public static SessionContext getActiveContext() {
         SessionContext ctx = THREAD_CONTEXT.get();
         if (ctx != null) {
             return ctx;
         }
-        return LATEST_SESSION;
+        log.warn("[AI Context] 当前执行线程未绑定 SessionContext，拒绝全局兜底以杜绝串流与越权风险");
+        return null;
     }
 
     /**
      * 准备工具执行线程环境并解析有效 UserId
+     * 严格安全规范：未登录用户返回 null，严禁静默兜底至演示账号 2L，防止越权操作他人数据！
      */
     public static Long prepareToolThreadAndResolveUserId(Long fallbackUserId) {
         SessionContext ctx = getActiveContext();
@@ -108,9 +107,13 @@ public class AiToolExecutionContext {
             uid = UserContext.getUserId();
         }
         if (uid == null || uid <= 0) {
-            uid = fallbackUserId != null && fallbackUserId > 0 ? fallbackUserId : 2L;
+            uid = (fallbackUserId != null && fallbackUserId > 0) ? fallbackUserId : null;
         }
-        UserContext.set(new UserContext.UserInfo(uid, null, null));
+        if (uid != null && uid > 0) {
+            UserContext.set(new UserContext.UserInfo(uid, null, null));
+        } else {
+            UserContext.clear();
+        }
         return uid;
     }
 
