@@ -79,14 +79,19 @@ public class AiToolExecutionContext {
     }
 
     /**
-     * 获取当前活动上下文（严格基于 ThreadLocal，无上下文时绝不跨会话兜底以防止多用户并发串流与越权）
+     * 获取当前活动上下文（严格基于 ThreadLocal；若在异步线程池中丢失 ThreadLocal 且当前仅有唯一活跃会话时安全恢复，多会话并发时拒绝盲目兜底以杜绝串流与越权风险）
      */
     public static SessionContext getActiveContext() {
         SessionContext ctx = THREAD_CONTEXT.get();
         if (ctx != null) {
             return ctx;
         }
-        log.warn("[AI Context] 当前执行线程未绑定 SessionContext，拒绝全局兜底以杜绝串流与越权风险");
+        if (SESSION_REGISTRY.size() == 1) {
+            SessionContext singleCtx = SESSION_REGISTRY.values().iterator().next();
+            THREAD_CONTEXT.set(singleCtx);
+            return singleCtx;
+        }
+        log.warn("[AI Context] 当前执行线程未绑定 SessionContext，且存在多会话并发(count={})，拒绝全局兜底以杜绝串流与越权风险", SESSION_REGISTRY.size());
         return null;
     }
 

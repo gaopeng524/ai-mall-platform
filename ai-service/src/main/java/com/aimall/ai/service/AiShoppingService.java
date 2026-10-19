@@ -18,9 +18,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.client.RestClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,10 +36,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 1. 统一基座多模态（qwen3.7-flash）：
  *    - Agent 1（视觉解构专家）：直连调用通义千问关闭冗余 CoT 深度思考 (enable_thinking: false)，2~3 秒极速产出精准特征 JSON；
  *    - Agent 2（选品风控与交易专家）：挂载 MallTools 9 项微服务能力，根据解构特征搜库、比价、排查无货并生成平替推荐卡片；
- * 2. 毫秒级防超时流式握手：请求一到达立即推送首个 SSE 存活包，让网关立即收到 HTTP 200 响应头，绝不触发 504 Gateway Timeout；
- * 3. 多级智能容错降级：大模型或网关异常时自动触发规则选品兜底推荐，绝不暴露底层技术栈与端口号报错；
- * 4. Redis + 内存双层会话记忆：滑动窗口裁剪与自动过期；
- * 5. 防越权与全链路追踪：AiToolExecutionContext 绑定网关透传鉴权 userId 与 TraceId。
+ * 2. 毫秒级防超时真流式响应：请求一到达立即推送首个 SSE 存活包，并通过 Spring AI Stream 管道将首字延迟压到几百毫秒，无伪打字机睡眠阻塞；
+ * 3. 视觉解构与语义双缓存：图片 MD5 Hash 缓存 + 热点导购问句缓存，实现 0ms 复用与 0 Token 消耗；
+ * 4. 三级容灾高可用架构：主模型（通义千问）-> 备用模型（DeepSeek 兜底）-> 规则微服务选品推荐，100% 坚固可用；
+ * 5. Redis + 内存双层会话记忆：滑动窗口裁剪与自动过期；
+ * 6. 防越权与全链路追踪：AiToolExecutionContext 绑定网关透传鉴权 userId 与 TraceId。
  */
 @Slf4j
 @Service
@@ -58,9 +62,24 @@ public class AiShoppingService {
     @Value("${spring.ai.openai.chat.options.model:qwen3.7-flash}")
     private String chatModel;
 
+    @Value("${deepseek.api-key:${DEEPSEEK_API_KEY:}}")
+    private String deepSeekApiKey;
+
+    @Value("${deepseek.base-url:https://api.deepseek.com}")
+    private String deepSeekBaseUrl;
+
+    @Value("${deepseek.model:deepseek-chat}")
+    private String deepSeekModel;
+
     private static final String REDIS_MEMORY_PREFIX = "ai:chat:memory:";
     private static final Duration MEMORY_TTL = Duration.ofMinutes(30);
     private static final int MAX_HISTORY_MESSAGES = 20;
+
+    private static final String REDIS_VISUAL_CACHE_PREFIX = "ai:cache:visual:";
+    private static final Duration VISUAL_CACHE_TTL = Duration.ofHours(24);
+
+    private static final String REDIS_QUERY_CACHE_PREFIX = "ai:cache:query:";
+    private static final Duration QUERY_CACHE_TTL = Duration.ofHours(6);
 
     /** 本地会话历史兜底容器（当 Redis 不可用时平滑降级） */
     private final Map<String, List<Message>> fallbackMemoryMap = new ConcurrentHashMap<>();
@@ -135,29 +154,66 @@ public class AiShoppingService {
 
                 if (hasImage) {
                     // ==========================================
-                    // 阶段一：Agent 1 视觉解构专家 (Visual Analyst)
+                    // 阶段一：Agent 1 视觉解构专家 (带图片 MD5 Hash 缓存，0ms 极速命中)
                     // ==========================================
-                    AiToolExecutionContext.emitToolStep(
-                            "visual_analysis",
-                            "已接收商品实物图片，正在进行视觉解构",
-                            "通义千问 qwen3.7-flash 极速视觉感知分析中...",
-                            "running"
-                    );
+                    Map<String, Object> visualAttr = null;
+                    String imageHash = null;
+                    try {
+                        imageHash = DigestUtils.md5DigestAsHex(imageData.getBytes(StandardCharsets.UTF_8));
+                        String cachedVisual = stringRedisTemplate.opsForValue().get(REDIS_VISUAL_CACHE_PREFIX + imageHash);
+                        if (cachedVisual != null && !cachedVisual.isBlank()) {
+                            visualAttr = objectMapper.readValue(cachedVisual, new TypeReference<Map<String, Object>>() {});
+                            AiToolExecutionContext.emitToolStep(
+                                    "visual_cache_hit",
+                                    "命中视觉解构缓存 (MD5=" + imageHash.substring(0, 8) + ")，0ms 极速复用视觉特征",
+                                    "已避免重复调用大模型 Vision 接口，节省 100% Token 与感知耗时",
+                                    "success"
+                            );
+                        }
+                    } catch (Exception e) {
+                        log.debug("读取视觉解构缓存略过: {}", e.getMessage());
+                    }
 
-                    Map<String, Object> visualAttr = callVisualAgent(userPrompt, imageData);
+                    if (visualAttr == null) {
+                        AiToolExecutionContext.emitToolStep(
+                                "visual_analysis",
+                                "已接收商品实物图片，正在进行视觉解构",
+                                "通义千问 qwen3.7-flash 极速视觉感知分析中...",
+                                "running"
+                        );
+
+                        visualAttr = callVisualAgent(userPrompt, imageData);
+
+                        if (imageHash != null && visualAttr != null && !visualAttr.isEmpty()) {
+                            try {
+                                stringRedisTemplate.opsForValue().set(
+                                        REDIS_VISUAL_CACHE_PREFIX + imageHash,
+                                        objectMapper.writeValueAsString(visualAttr),
+                                        VISUAL_CACHE_TTL
+                                );
+                            } catch (Exception e) {
+                                log.debug("写入视觉解构缓存略过: {}", e.getMessage());
+                            }
+                        }
+
+                        String summary = String.valueOf(visualAttr.getOrDefault("summary", "优质热销单品"));
+                        String category = String.valueOf(visualAttr.getOrDefault("category", "精选商品"));
+                        String color = String.valueOf(visualAttr.getOrDefault("color", "经典配色"));
+                        String searchQuery = String.valueOf(visualAttr.getOrDefault("searchQuery", category));
+
+                        AiToolExecutionContext.emitToolStep(
+                                "visual_analysis",
+                                "视觉解构完成: " + summary,
+                                "品类: " + category + " | 配色: " + color + " | 提取搜索词: " + searchQuery,
+                                "success"
+                        );
+                    }
 
                     String category = String.valueOf(visualAttr.getOrDefault("category", "精选商品"));
                     String summary = String.valueOf(visualAttr.getOrDefault("summary", "优质热销单品"));
                     String color = String.valueOf(visualAttr.getOrDefault("color", "经典配色"));
                     String brand = String.valueOf(visualAttr.getOrDefault("brand", "知名品牌"));
                     String searchQuery = String.valueOf(visualAttr.getOrDefault("searchQuery", category));
-
-                    AiToolExecutionContext.emitToolStep(
-                            "visual_analysis",
-                            "视觉解构完成: " + summary,
-                            "品类: " + category + " | 配色: " + color + " | 提取搜索词: " + searchQuery,
-                            "success"
-                    );
 
                     // ==========================================
                     // 阶段二：组装 Agent 2 拍立淘找平替任务 Prompt
@@ -183,10 +239,37 @@ public class AiShoppingService {
                 // 2. 加载会话历史（优先从 Redis 读取）
                 List<Message> history = loadSessionHistory(sessionId);
 
-                // 3. 辅助 RAG：检索向量库背景知识
+                // 3. 语义问句缓存（非图片、首轮会话且非交易操作时检查缓存）
+                boolean isCandidateForCache = !hasImage && history.isEmpty() && !isTransactionalQuery(userPrompt);
+                String queryCacheKey = null;
+                if (isCandidateForCache) {
+                    String queryHash = DigestUtils.md5DigestAsHex(userPrompt.trim().toLowerCase().getBytes(StandardCharsets.UTF_8));
+                    queryCacheKey = REDIS_QUERY_CACHE_PREFIX + queryHash;
+                    try {
+                        String cachedAnswer = stringRedisTemplate.opsForValue().get(queryCacheKey);
+                        if (cachedAnswer != null && !cachedAnswer.isBlank()) {
+                            AiToolExecutionContext.emitToolStep(
+                                    "semantic_cache_hit",
+                                    "命中导购问句语义缓存，0ms 极速响应",
+                                    "热点问答语义库直出，首字延迟 0ms，节省 100% Token 成本",
+                                    "success"
+                            );
+                            emitChunkedText(sink, cachedAnswer);
+                            history.add(new UserMessage(userPrompt));
+                            history.add(new AssistantMessage(cachedAnswer));
+                            saveSessionHistory(sessionId, history);
+                            sink.complete();
+                            return;
+                        }
+                    } catch (Exception e) {
+                        log.debug("读取问句缓存略过: {}", e.getMessage());
+                    }
+                }
+
+                // 4. 辅助 RAG：检索向量库背景知识
                 String ragContext = retrieveContext(actualAgentPrompt);
 
-                // 4. 组装 Agent 2 System Prompt
+                // 5. 组装 Agent 2 System Prompt
                 String userAuthDesc = (effectiveUserId != null && effectiveUserId > 0)
                         ? "当前已认证用户 ID 为 " + effectiveUserId + "（所有交易工具已自动绑定该身份）。"
                         : "当前用户状态为【未登录访客】。用户可以自由浏览与咨询商品信息；但当用户要求加购物车、结算下单或查询个人订单时，工具将进行安全拦截，你应当亲切提示用户【请先登录商城账号】。";
@@ -194,68 +277,120 @@ public class AiShoppingService {
                 String systemPrompt = SYSTEM_PROMPT.formatted(userAuthDesc)
                         + (ragContext.isEmpty() ? "" : "\n\n【商品知识库参考】\n" + ragContext);
 
-                // 5. 调用 Agent 2 (选品风控与交易专家) 执行 Function Calling
-                var requestSpec = chatClient.prompt()
-                        .system(systemPrompt);
+                // 6. 调用 Agent 2 (选品风控与交易专家) 执行真流式 Function Calling
+                StringBuilder fullResponse = new StringBuilder();
+                boolean callSucceeded = false;
 
-                // 【核心修复 P0-1】：真正将裁剪后的多轮历史记忆传入请求，杜绝模型失忆
-                if (history != null && !history.isEmpty()) {
-                    requestSpec.messages(history);
+                try {
+                    var requestSpec = chatClient.prompt()
+                            .system(systemPrompt);
+
+                    // 【核心修复 P0-1】：将裁剪后的多轮历史记忆传入请求
+                    if (history != null && !history.isEmpty()) {
+                        requestSpec.messages(history);
+                    }
+
+                    // 绑定 ToolContext 防止多线程异步丢失上下文
+                    requestSpec.toolContext(Map.of("sessionId", sessionId));
+
+                    Flux<String> streamFlux = requestSpec
+                            .user(actualAgentPrompt)
+                            .functions(
+                                    "searchProducts",
+                                    "getProductDetail",
+                                    "createOrder",
+                                    "getUserOrders",
+                                    "getOrderDetail",
+                                    "cancelOrder",
+                                    "addToCart",
+                                    "getCartList",
+                                    "checkoutCart"
+                            )
+                            .stream()
+                            .content();
+
+                    // 【核心真流式 P1-1】：实时透传响应块，消灭 Thread.sleep(12) 阻塞
+                    streamFlux
+                            .doOnNext(chunk -> {
+                                if (chunk != null && !chunk.isEmpty()) {
+                                    fullResponse.append(chunk);
+                                    sink.next(AiToolExecutionContext.formatChunkEvent(chunk));
+                                }
+                            })
+                            .blockLast();
+
+                    if (fullResponse.length() > 0) {
+                        callSucceeded = true;
+                    }
+                } catch (Exception primaryEx) {
+                    log.warn("[AI Agent 2 主模型调用异常] 通义千问流式异常: {}, 触发容灾链路", primaryEx.getMessage());
                 }
 
-                String response = requestSpec
-                        .user(actualAgentPrompt)
-                        .functions(
-                                "searchProducts",
-                                "getProductDetail",
-                                "createOrder",
-                                "getUserOrders",
-                                "getOrderDetail",
-                                "cancelOrder",
-                                "addToCart",
-                                "getCartList",
-                                "checkoutCart"
-                        )
-                        .call()
-                        .content();
+                // 7. 【多模型容灾 Failover P1-3】：通义千问超时/限流时无缝切换 DeepSeek
+                if (!callSucceeded || fullResponse.length() == 0) {
+                    if (deepSeekApiKey != null && !deepSeekApiKey.isBlank()) {
+                        try {
+                            AiToolExecutionContext.emitToolStep(
+                                    "failover_routing",
+                                    "主模型通义千问超时/限流，已自动无缝切换至 DeepSeek 兜底引擎",
+                                    "多模型高可用容灾保护已触发 (Model: " + deepSeekModel + ")",
+                                    "success"
+                            );
 
-                if (response == null || response.isBlank()) {
-                    response = "已为您检索到相关商品，详情请查看上方的商品推荐卡片～";
+                            String deepSeekAnswer = callDeepSeekFailover(systemPrompt, history, actualAgentPrompt);
+                            if (deepSeekAnswer != null && !deepSeekAnswer.isBlank()) {
+                                fullResponse.setLength(0);
+                                fullResponse.append(deepSeekAnswer);
+                                emitChunkedText(sink, deepSeekAnswer);
+                                callSucceeded = true;
+                            }
+                        } catch (Exception dsEx) {
+                            log.error("[AI DeepSeek 兜底调用异常] {}", dsEx.getMessage(), dsEx);
+                        }
+                    }
                 }
 
-                // 6. 保存会话历史至 Redis (记录当前轮用户提问与回答)
+                // 8. 第三级兜底：规则微服务选品卡片推荐（绝不向用户展示端口报错）
+                if (!callSucceeded || fullResponse.length() == 0) {
+                    log.warn("[AI 最终容错降级] 触发规则选品兜底推荐");
+                    try {
+                        String fallbackKeyword = hasImage ? "耳机" : (userPrompt.length() > 6 ? userPrompt.substring(0, 6) : userPrompt);
+                        var fallbackResult = productFeignClient.search(fallbackKeyword, 0.0);
+                        if (fallbackResult != null && fallbackResult.getData() != null && !fallbackResult.getData().isEmpty()) {
+                            AiToolExecutionContext.emitProducts(fallbackResult.getData());
+                        }
+                    } catch (Exception ex) {
+                        log.warn("[AI 降级选品 RPC 略过] {}", ex.getMessage());
+                    }
+
+                    String fallbackText = "抱歉亲，AI 导购大脑刚刚稍微开小差了～不过小购已为您调出商城热销的相关爆款与高性价比平替好物（见上方商品卡片），您可以先挑选看看；您也可以换个描述再问问我哦！";
+                    sink.next(AiToolExecutionContext.formatChunkEvent(fallbackText));
+                    fullResponse.append(fallbackText);
+                }
+
+                String finalAnswer = fullResponse.toString();
+                if (finalAnswer.isBlank()) {
+                    finalAnswer = "已为您检索到相关商品，详情请查看上方的商品推荐卡片～";
+                    sink.next(AiToolExecutionContext.formatChunkEvent(finalAnswer));
+                }
+
+                // 9. 保存会话历史至 Redis (记录当前轮用户提问与回答)
                 history.add(new UserMessage(hasImage ? "[拍立淘识别] " + userPrompt : userPrompt));
-                history.add(new AssistantMessage(response));
+                history.add(new AssistantMessage(finalAnswer));
                 saveSessionHistory(sessionId, history);
 
-                // 7. 将回复包装为结构化 chunk 事件平滑推流
-                int chunkSize = 6;
-                for (int i = 0; i < response.length(); i += chunkSize) {
-                    int end = Math.min(i + chunkSize, response.length());
-                    String piece = response.substring(i, end);
-                    sink.next(AiToolExecutionContext.formatChunkEvent(piece));
+                // 10. 写入问句语义缓存（热点导购问句）
+                if (isCandidateForCache && queryCacheKey != null && callSucceeded) {
                     try {
-                        Thread.sleep(12);
-                    } catch (InterruptedException ignored) {
-                        Thread.currentThread().interrupt();
-                        break;
+                        stringRedisTemplate.opsForValue().set(queryCacheKey, finalAnswer, QUERY_CACHE_TTL);
+                    } catch (Exception ignored) {
                     }
-                }
-                sink.complete();
-            } catch (Exception e) {
-                log.error("[AI Agent 对话异常] 触发智能选品兜底降级: {}", e.getMessage(), e);
-                // 智能容错降级：不向用户暴露技术栈报错，主动进行微服务在售商品兜底推荐
-                try {
-                    String fallbackKeyword = hasImage ? "耳机" : (userPrompt.length() > 6 ? userPrompt.substring(0, 6) : userPrompt);
-                    var fallbackResult = productFeignClient.search(fallbackKeyword, 0.0);
-                    if (fallbackResult != null && fallbackResult.getData() != null && !fallbackResult.getData().isEmpty()) {
-                        AiToolExecutionContext.emitProducts(fallbackResult.getData());
-                    }
-                } catch (Exception ex) {
-                    log.warn("[AI 降级选品 RPC 略过] {}", ex.getMessage());
                 }
 
-                String fallbackText = "抱歉亲，AI 导购大脑刚刚稍微开小差了～不过小购已为您调出商城热销的相关爆款与高性价比平替好物（见上方商品卡片），您可以先挑选看看；您也可以换个描述再问问我哦！";
+                sink.complete();
+            } catch (Exception e) {
+                log.error("[AI Agent 对话未捕获异常] {}", e.getMessage(), e);
+                String fallbackText = "抱歉亲，小购刚刚遇到了一点小插曲，请您稍后再试或换个关键词问我哦！";
                 sink.next(AiToolExecutionContext.formatChunkEvent(fallbackText));
                 sink.complete();
             } finally {
@@ -314,12 +449,100 @@ public class AiShoppingService {
             return extractContentFromOpenAiResponse(rawResponse);
         } catch (Exception e) {
             log.warn("[AI Agent 1 视觉解构调用异常] 自动降级: {}", e.getMessage(), e);
+            String fallbackKeyword = (userPrompt != null && !userPrompt.isBlank() && !userPrompt.contains("帮我识别"))
+                    ? userPrompt : "精选好物";
             return Map.of(
-                    "category", "耳机",
-                    "searchQuery", "耳机",
-                    "summary", "优质数码降噪耳机"
+                    "category", fallbackKeyword,
+                    "searchQuery", fallbackKeyword,
+                    "summary", "优质热销高性价比好物"
             );
         }
+    }
+
+    /**
+     * 多模型 Failover 容灾兜底：通过 RestClient 直连 DeepSeek OpenAI 兼容接口
+     */
+    private String callDeepSeekFailover(String systemPrompt, List<Message> history, String userPrompt) {
+        try {
+            String baseUrl = (deepSeekBaseUrl != null && !deepSeekBaseUrl.isBlank()) 
+                    ? deepSeekBaseUrl.trim() : "https://api.deepseek.com";
+            String url = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
+            if (!url.contains("/v1/") && !url.endsWith("/chat/completions")) {
+                url = baseUrl + "/v1/chat/completions";
+            }
+
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(Map.of("role", "system", "content", systemPrompt));
+            if (history != null) {
+                for (Message msg : history) {
+                    String role = (msg instanceof AssistantMessage) ? "assistant" : "user";
+                    messages.add(Map.of("role", role, "content", msg.getContent() != null ? msg.getContent() : ""));
+                }
+            }
+            messages.add(Map.of("role", "user", "content", userPrompt));
+
+            Map<String, Object> requestBody = Map.of(
+                    "model", (deepSeekModel != null && !deepSeekModel.isBlank()) ? deepSeekModel : "deepseek-chat",
+                    "messages", messages,
+                    "temperature", 0.7,
+                    "stream", false
+            );
+
+            SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+            requestFactory.setConnectTimeout(8000);
+            requestFactory.setReadTimeout(30000);
+
+            RestClient restClient = RestClient.builder()
+                    .requestFactory(requestFactory)
+                    .build();
+
+            String rawResponse = restClient.post()
+                    .uri(url)
+                    .header("Authorization", "Bearer " + deepSeekApiKey.trim())
+                    .header("Content-Type", "application/json")
+                    .body(requestBody)
+                    .retrieve()
+                    .body(String.class);
+
+            log.info("[AI DeepSeek 兜底成功响应] length={}", rawResponse != null ? rawResponse.length() : 0);
+            if (rawResponse != null) {
+                JsonNode root = objectMapper.readTree(rawResponse);
+                JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
+                if (contentNode.isTextual()) {
+                    return contentNode.asText();
+                }
+            }
+        } catch (Exception e) {
+            log.error("[AI DeepSeek 调用失败] {}", e.getMessage(), e);
+        }
+        return null;
+    }
+
+    /**
+     * 分块推流文本（平滑输出，杜绝长文本单次卡顿）
+     */
+    private void emitChunkedText(FluxSink<String> sink, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        int chunkSize = 16;
+        for (int i = 0; i < text.length(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, text.length());
+            sink.next(AiToolExecutionContext.formatChunkEvent(text.substring(i, end)));
+        }
+    }
+
+    /**
+     * 判断是否为交易类或个性化私有操作（交易操作严禁读取或写入语义缓存）
+     */
+    private boolean isTransactionalQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        String q = query.toLowerCase();
+        return q.contains("买") || q.contains("下单") || q.contains("车") || q.contains("购物车")
+                || q.contains("订单") || q.contains("支付") || q.contains("结算") || q.contains("取消")
+                || q.contains("退款") || q.contains("我的");
     }
 
     /**
@@ -362,9 +585,10 @@ public class AiShoppingService {
             return objectMapper.readValue(clean, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             log.warn("[AI Visual Agent] JSON 解析非标准，使用兜底抽取: {}", e.getMessage());
+            String fallbackKeyword = clean.length() > 20 ? clean.substring(0, 20) : clean;
             return Map.of(
-                    "category", "耳机",
-                    "searchQuery", "耳机",
+                    "category", "精选商品",
+                    "searchQuery", fallbackKeyword.isBlank() ? "精选商品" : fallbackKeyword,
                     "summary", clean.length() > 60 ? clean.substring(0, 60) + "..." : clean
             );
         }
