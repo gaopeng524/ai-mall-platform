@@ -120,7 +120,7 @@ public class OrderController {
             @RequestParam(value = "orderNo", required = false) String orderNo) {
         Long currentUserId = UserContext.getUserId();
         String role = UserContext.getUserRole();
-        if (currentUserId != null && !"ADMIN".equalsIgnoreCase(role)) {
+        if (currentUserId == null || !UserContext.isAdmin(role)) {
             throw new BusinessException(403, "仅管理员/商家可执行发货操作");
         }
         boolean success = orderService.shipOrder(orderId, orderNo);
@@ -155,7 +155,7 @@ public class OrderController {
         }
         Long currentUserId = UserContext.getUserId();
         String role = UserContext.getUserRole();
-        if (currentUserId != null && !"ADMIN".equalsIgnoreCase(role)) {
+        if (currentUserId != null && !UserContext.isAdmin(role)) {
             if (!currentUserId.equals(order.getUserId())) {
                 throw new BusinessException(403, "无权查看他人的订单明细");
             }

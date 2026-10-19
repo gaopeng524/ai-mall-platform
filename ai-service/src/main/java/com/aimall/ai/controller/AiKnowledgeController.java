@@ -25,7 +25,7 @@ public class AiKnowledgeController {
      */
     @PostMapping("/init")
     public Result<Map<String, Object>> initDefault() {
-        if (!"ADMIN".equalsIgnoreCase(UserContext.getUserRole())) {
+        if (!UserContext.isAdmin()) {
             return Result.fail(403, "无权限操作，仅管理员可触发知识库初始化");
         }
         int count = knowledgeService.initDefaultKnowledgeBase();
@@ -40,7 +40,7 @@ public class AiKnowledgeController {
      */
     @PostMapping("/sync")
     public Result<Map<String, Object>> syncProducts() {
-        if (!"ADMIN".equalsIgnoreCase(UserContext.getUserRole())) {
+        if (!UserContext.isAdmin()) {
             return Result.fail(403, "无权限操作，仅管理员可触发商品知识库同步");
         }
         int count = knowledgeService.syncFromProductService();

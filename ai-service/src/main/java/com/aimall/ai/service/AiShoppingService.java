@@ -2,6 +2,7 @@ package com.aimall.ai.service;
 
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
+import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.trace.TraceContext;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -230,12 +231,12 @@ public class AiShoppingService {
                     }
 
                     String actualAgentPrompt = userPrompt;
+                    Map<String, Object> visualAttr = null;
 
                     if (hasImage && !isCancelled.get()) {
                         // ==========================================
                         // 阶段一：Agent 1 视觉解构专家 (带图片 MD5 Hash 缓存，0ms 极速命中)
                         // ==========================================
-                        Map<String, Object> visualAttr = null;
                         String imageHash = null;
                         try {
                             imageHash = DigestUtils.md5DigestAsHex(imageData.getBytes(StandardCharsets.UTF_8));
@@ -376,8 +377,14 @@ public class AiShoppingService {
                         return;
                     }
 
-                    // 4. 辅助 RAG：检索向量库背景知识
-                    String ragContext = retrieveContext(actualAgentPrompt);
+                    // 4. 辅助 RAG：检索向量库背景知识（优先提取品类与核心特征作为紧凑检索词，避免把数百字长指引当向量查询导致相似度稀释）
+                    String ragQuery = userPrompt;
+                    if (hasImage && visualAttr != null) {
+                        String cat = String.valueOf(visualAttr.getOrDefault("category", ""));
+                        String q = String.valueOf(visualAttr.getOrDefault("searchQuery", ""));
+                        ragQuery = (cat + " " + q + " " + userPrompt).trim();
+                    }
+                    String ragContext = retrieveContext(ragQuery);
 
                     // 5. 组装 Agent 2 System Prompt
                     String userAuthDesc = (effectiveUserId != null && effectiveUserId > 0)
@@ -742,7 +749,7 @@ public class AiShoppingService {
                     SearchRequest.builder()
                             .query(query)
                             .topK(3)
-                            .similarityThreshold(0.7)
+                            .similarityThreshold(0.60)
                             .build());
             if (docs == null || docs.isEmpty()) {
                 return "";
@@ -750,7 +757,7 @@ public class AiShoppingService {
             AiToolExecutionContext.emitToolStep(
                     "vector_search",
                     "已从 pgvector 向量库召回 " + docs.size() + " 条商品知识片段",
-                    "余弦相似度阈值 ≥ 0.70",
+                    "余弦相似度阈值 ≥ 0.60",
                     "success"
             );
             StringBuilder sb = new StringBuilder();
@@ -833,7 +840,7 @@ public class AiShoppingService {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
-        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        boolean isAdmin = UserContext.isAdmin(userRole);
         try {
             String owner = stringRedisTemplate.opsForValue().get(REDIS_SESSION_OWNER_PREFIX + sessionId);
             if (owner != null && !owner.isBlank() && !isAdmin) {

@@ -79,13 +79,14 @@ spring:
             response-timeout: 180000
             connect-timeout: 10000
 
-        # 知识库服务
+        # 知识库服务 (由 ai-service 内置知识库模块承载)
         - id: knowledge-service
-          uri: lb://knowledge-service
+          uri: lb://ai-service
           predicates:
             - Path=/api/knowledge/**
           filters:
             - StripPrefix=1
+            - PrefixPath=/ai
 
         # 支付中台服务
         - id: payment-service

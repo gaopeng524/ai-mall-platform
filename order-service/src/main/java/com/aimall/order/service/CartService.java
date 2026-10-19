@@ -323,15 +323,25 @@ public class CartService {
                 String orderNo = orderService.createOrder(item.getProductId(), item.getQuantity(), userId, false);
                 createdOrderNos.add(orderNo);
                 totalAmount = totalAmount.add(item.getSubtotal());
-
-                // 结算成功后移出购物车
-                stringRedisTemplate.opsForHash().delete(cartKey, String.valueOf(item.getProductId()));
             } catch (Exception e) {
-                log.error("[购物车结算单项失败] 商品: {}, 数量: {}, 错误: {}",
+                log.error("[购物车结算单项失败] 商品: {}, 数量: {}, 错误: {}, 正在触发已创建订单补偿回滚",
                         item.getProductId(), item.getQuantity(), e.getMessage());
+                // 事务补偿：原子取消此前已经成功创建的订单并回滚对应库存，避免产生脏单
+                for (String createdOrderNo : createdOrderNos) {
+                    try {
+                        orderService.cancelOrder(null, createdOrderNo, userId, null);
+                    } catch (Exception cancelEx) {
+                        log.error("[购物车结算补偿取消失败] orderNo: {}, error: {}", createdOrderNo, cancelEx.getMessage());
+                    }
+                }
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(),
                         "商品【" + item.getProductName() + "】结算失败: " + e.getMessage());
             }
+        }
+
+        // 仅在全部商品均结算成功后，批量移出购物车
+        for (CartItemVO item : selectedItems) {
+            stringRedisTemplate.opsForHash().delete(cartKey, String.valueOf(item.getProductId()));
         }
 
         String primaryOrderNo = createdOrderNos.get(0);

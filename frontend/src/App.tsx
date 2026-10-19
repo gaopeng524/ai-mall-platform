@@ -79,11 +79,15 @@ export const App: React.FC = () => {
 
   // 从 order-service 拉取真实用户的历史订单
   const refreshOrders = React.useCallback(async () => {
+    if (!token || !user) {
+      setOrders([]);
+      return;
+    }
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/order/list?userId=${user?.id || 2}`, {
+      const res = await fetch(`${targetBase}/api/order/list?userId=${user.id}`, {
         headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         }
       });
       const json = await res.json().catch(() => null);
@@ -97,12 +101,16 @@ export const App: React.FC = () => {
 
   // 从 order-service (Redis Hash) 拉取真实购物车数据
   const refreshCart = React.useCallback(async () => {
+    if (!token || !user) {
+      setCartData(null);
+      return;
+    }
     try {
       setCartLoading(true);
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/cart/list?userId=${user?.id || 2}`, {
+      const res = await fetch(`${targetBase}/api/cart/list?userId=${user.id}`, {
         headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         }
       });
       const json = await res.json().catch(() => null);
@@ -136,6 +144,11 @@ export const App: React.FC = () => {
 
   // 点击“立即购买”或 AI 聊天里的“一键下单” -> 发送真实下单请求
   const handleBuy = async (product: Product) => {
+    if (!token || !user) {
+      showToast('请先登录商城账号后再下单购买');
+      setIsAuthOpen(true);
+      return;
+    }
     const isSeckill = Boolean(product.tags?.some(t => t.includes('秒杀')) || product.name.includes('秒杀'));
     const endpoint = isSeckill ? '/api/order/seckill/create' : '/api/order/create';
 
@@ -143,17 +156,17 @@ export const App: React.FC = () => {
       service: 'api-gateway',
       protocol: 'HTTP/SSE',
       action: isSeckill ? 'Seckill Order Dispatch' : 'Transactional Order Dispatch',
-      detail: `POST ${endpoint} (productId=${product.id}, userId=${user?.id || 2}, 通道=${isSeckill ? '秒杀极速削峰' : 'RocketMQ 2PC事务'})`
+      detail: `POST ${endpoint} (productId=${product.id}, userId=${user.id}, 通道=${isSeckill ? '秒杀极速削峰' : 'RocketMQ 2PC事务'})`
     });
 
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
       const res = await fetch(
-        `${targetBase}${endpoint}?productId=${product.id}&quantity=1&userId=${user?.id || 2}${isSeckill ? '&isSeckill=true' : ''}`,
+        `${targetBase}${endpoint}?productId=${product.id}&quantity=1&userId=${user.id}${isSeckill ? '&isSeckill=true' : ''}`,
         {
           method: 'POST',
           headers: {
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            'Authorization': `Bearer ${token}`
           }
         }
       );
@@ -176,7 +189,7 @@ export const App: React.FC = () => {
       const newOrder: Order = {
         id: Date.now(),
         orderNo,
-        userId: user?.id || 2,
+        userId: user.id,
         productId: product.id,
         productName: product.name,
         price: product.price,
@@ -341,11 +354,16 @@ export const App: React.FC = () => {
 
   // 1. 添加商品到购物车 (调用 Redis Hash 接口)
   const handleAddToCart = async (product: Product, quantity = 1) => {
+    if (!token || !user) {
+      showToast('请先登录商城账号后再加购');
+      setIsAuthOpen(true);
+      return;
+    }
     addLog({
       service: 'order-service',
       protocol: 'OpenFeign RPC',
       action: 'Add To Cart',
-      detail: `POST /api/cart/add (商品: ${product.name}, 数量: ${quantity}, 用户: ${user?.id || 2})`
+      detail: `POST /api/cart/add (商品: ${product.name}, 数量: ${quantity}, 用户: ${user.id})`
     });
 
     try {
@@ -354,12 +372,12 @@ export const App: React.FC = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           productId: product.id,
           quantity,
-          userId: user?.id || 2
+          userId: user.id
         })
       });
       const json = await res.json().catch(() => null);
@@ -376,18 +394,19 @@ export const App: React.FC = () => {
 
   // 2. 修改购物车数量
   const handleUpdateCartQuantity = async (productId: number, quantity: number) => {
+    if (!token || !user) return;
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
       const res = await fetch(`${targetBase}/api/cart/update-quantity`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           productId,
           quantity,
-          userId: user?.id || 2
+          userId: user.id
         })
       });
       const json = await res.json().catch(() => null);
@@ -401,19 +420,20 @@ export const App: React.FC = () => {
 
   // 3. 切换勾选状态
   const handleToggleCartCheck = async (productId: number, selected: boolean, checkAll = false) => {
+    if (!token || !user) return;
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
       const res = await fetch(`${targetBase}/api/cart/check`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           productId: checkAll ? null : productId,
           selected,
           checkAll,
-          userId: user?.id || 2
+          userId: user.id
         })
       });
       const json = await res.json().catch(() => null);
@@ -427,12 +447,13 @@ export const App: React.FC = () => {
 
   // 4. 移除商品
   const handleRemoveCartItem = async (productId: number) => {
+    if (!token || !user) return;
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/cart/remove?productId=${productId}&userId=${user?.id || 2}`, {
+      const res = await fetch(`${targetBase}/api/cart/remove?productId=${productId}&userId=${user.id}`, {
         method: 'POST',
         headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         }
       });
       const json = await res.json().catch(() => null);
@@ -447,12 +468,13 @@ export const App: React.FC = () => {
 
   // 5. 清空购物车
   const handleClearCart = async () => {
+    if (!token || !user) return;
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/cart/clear?userId=${user?.id || 2}`, {
+      const res = await fetch(`${targetBase}/api/cart/clear?userId=${user.id}`, {
         method: 'POST',
         headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         }
       });
       const json = await res.json().catch(() => null);
@@ -473,6 +495,11 @@ export const App: React.FC = () => {
 
   // 6. 购物车一键合并结算
   const handleCartCheckout = async () => {
+    if (!token || !user) {
+      showToast('请先登录商城账号后再结算');
+      setIsAuthOpen(true);
+      return;
+    }
     setCheckoutLoading(true);
     addLog({
       service: 'order-service',
@@ -483,10 +510,10 @@ export const App: React.FC = () => {
 
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/cart/checkout?userId=${user?.id || 2}`, {
+      const res = await fetch(`${targetBase}/api/cart/checkout?userId=${user.id}`, {
         method: 'POST',
         headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          'Authorization': `Bearer ${token}`
         }
       });
       const json = await res.json().catch(() => null);
@@ -513,8 +540,21 @@ export const App: React.FC = () => {
       {/* 顶部导航 */}
       <Navbar
         onOpenAiChat={() => setIsAiChatOpen(true)}
-        onOpenOrders={() => setIsOrdersOpen(true)}
+        onOpenOrders={() => {
+          if (!token || !user) {
+            showToast('请先登录商城账号后查看订单');
+            setIsAuthOpen(true);
+            return;
+          }
+          setIsOrdersOpen(true);
+          refreshOrders();
+        }}
         onOpenCart={() => {
+          if (!token || !user) {
+            showToast('请先登录商城账号后查看购物车');
+            setIsAuthOpen(true);
+            return;
+          }
           setIsCartOpen(true);
           refreshCart();
         }}

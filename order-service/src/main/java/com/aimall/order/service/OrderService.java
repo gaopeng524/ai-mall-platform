@@ -1,5 +1,6 @@
 package com.aimall.order.service;
 
+import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.exception.ErrorCode;
 import com.aimall.common.result.Result;
@@ -355,13 +356,13 @@ public class OrderService {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean payOrder(Long orderId, String orderNo, Long userId, String userRole) {
-        Order order = findOrder(orderId, orderNo);
+        Order order = findOrder(orderId, orderNo, userId);
         if (order == null) {
             log.warn("[订单支付异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
         }
 
-        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        boolean isAdmin = UserContext.isAdmin(userRole);
         if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
             throw new BusinessException(403, "无权支付他人的订单");
         }
@@ -388,13 +389,13 @@ public class OrderService {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean cancelOrder(Long orderId, String orderNo, Long userId, String userRole) {
-        Order order = findOrder(orderId, orderNo);
+        Order order = findOrder(orderId, orderNo, userId);
         if (order == null) {
             log.warn("[取消订单异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
         }
 
-        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        boolean isAdmin = UserContext.isAdmin(userRole);
         if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
             throw new BusinessException(403, "无权取消他人的订单");
         }
@@ -477,13 +478,13 @@ public class OrderService {
 
     @Transactional(rollbackFor = Exception.class)
     public boolean completeOrder(Long orderId, String orderNo, Long userId, String userRole) {
-        Order order = findOrder(orderId, orderNo);
+        Order order = findOrder(orderId, orderNo, userId);
         if (order == null) {
             log.warn("[确认收货异常] 订单不存在: orderId={}, orderNo={}", orderId, orderNo);
             return false;
         }
 
-        boolean isAdmin = "ADMIN".equalsIgnoreCase(userRole);
+        boolean isAdmin = UserContext.isAdmin(userRole);
         if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
             throw new BusinessException(403, "无权确认收货他人的订单");
         }
@@ -511,9 +512,13 @@ public class OrderService {
     }
 
     /**
-     * 智能寻单：先查 orderNo，再查真实 orderId，若 orderId 为前端时间戳则兜底查询最新待支付订单
+     * 智能寻单：先查 orderNo，再查真实 orderId，若 orderId 为前端时间戳则兜底查询当前用户最新待支付订单
      */
     private Order findOrder(Long orderId, String orderNo) {
+        return findOrder(orderId, orderNo, null);
+    }
+
+    private Order findOrder(Long orderId, String orderNo, Long userId) {
         if (orderNo != null && !orderNo.trim().isEmpty()) {
             Order order = orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo.trim()));
             if (order != null) {
@@ -528,11 +533,13 @@ public class OrderService {
             // 兼容容错：前端可能使用了 JS Date.now() 13位时间戳作为虚拟ID
             if (orderId > 1000000000000L) {
                 log.warn("[智能寻单] orderId={} 判定为前端虚拟时间戳，正在匹配最近一条待支付订单", orderId);
+                var query = new LambdaQueryWrapper<Order>()
+                        .eq(Order::getStatus, "PENDING");
+                if (userId != null && userId > 0) {
+                    query.eq(Order::getUserId, userId);
+                }
                 return orderMapper.selectOne(
-                        new LambdaQueryWrapper<Order>()
-                                .eq(Order::getStatus, "PENDING")
-                                .orderByDesc(Order::getId)
-                                .last("LIMIT 1")
+                        query.orderByDesc(Order::getId).last("LIMIT 1")
                 );
             }
         }

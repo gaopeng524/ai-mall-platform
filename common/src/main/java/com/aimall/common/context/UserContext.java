@@ -38,6 +38,24 @@ public class UserContext {
         return info != null ? info.role() : null;
     }
 
+    /**
+     * 判断当前上下文用户是否具备管理员权限（兼容 ADMIN 与 ROLE_ADMIN）
+     */
+    public static boolean isAdmin() {
+        return isAdmin(getUserRole());
+    }
+
+    /**
+     * 判断指定角色是否具备管理员权限（兼容 ADMIN 与 ROLE_ADMIN）
+     */
+    public static boolean isAdmin(String role) {
+        if (role == null || role.isBlank()) {
+            return false;
+        }
+        String clean = role.trim().toUpperCase();
+        return "ADMIN".equals(clean) || "ROLE_ADMIN".equals(clean);
+    }
+
     public static void clear() {
         CONTEXT.remove();
     }
