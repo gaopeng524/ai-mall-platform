@@ -7,6 +7,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +35,7 @@ public class AiToolExecutionContext {
         private Long userId;
         private String traceId;
         private Consumer<String> eventConsumer;
+        private volatile List<Map<String, Object>> lastEmittedProducts;
     }
 
     /** 线程本地上下文绑定（支持父子线程继承） */
@@ -229,6 +231,7 @@ public class AiToolExecutionContext {
         if (ctx == null || ctx.getEventConsumer() == null || products == null || products.isEmpty()) {
             return;
         }
+        ctx.setLastEmittedProducts(new ArrayList<>(products));
         try {
             Map<String, Object> payload = Map.of(
                     "event", "products",
@@ -239,5 +242,13 @@ public class AiToolExecutionContext {
         } catch (Exception e) {
             log.warn("[AI Event] emitProducts error: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 获取当前会话最近推送的商品列表（用于语义缓存快照联动）
+     */
+    public static List<Map<String, Object>> getLastEmittedProducts() {
+        SessionContext ctx = getActiveContext();
+        return ctx != null ? ctx.getLastEmittedProducts() : null;
     }
 }

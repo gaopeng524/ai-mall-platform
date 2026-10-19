@@ -50,7 +50,7 @@ public class MallTools {
     ) {}
 
     public record UserOrdersRequest(
-            @JsonPropertyDescription("可选过滤状态：ALL/PENDING/PAID/CANCELLED，默认ALL") String statusFilter
+            @JsonPropertyDescription("可选过滤状态：ALL/PENDING/PAID/SHIPPED/DONE/CANCELLED，默认ALL") String statusFilter
     ) {}
 
     public record OrderDetailRequest(
@@ -66,13 +66,9 @@ public class MallTools {
             @JsonProperty(required = true) @JsonPropertyDescription("加购数量，默认1") Integer quantity
     ) {}
 
-    public record GetCartRequest(
-            @JsonPropertyDescription("占位参数，传true即可") Boolean refresh
-    ) {}
+    public record GetCartRequest() {}
 
-    public record CheckoutCartRequest(
-            @JsonPropertyDescription("确认结算标识，传true即可") Boolean confirm
-    ) {}
+    public record CheckoutCartRequest() {}
 
     @Bean
     @Description("根据关键词和预算上限搜索商品列表，返回商品ID、名称、分类、价格、库存与核心卖点。当用户询问或挑选商品时调用。")
@@ -93,13 +89,14 @@ public class MallTools {
                     return "暂未找到符合条件的商品";
                 }
                 List<Map<String, Object>> products = result.getData();
+                List<Map<String, Object>> topProducts = products.stream().limit(6).toList();
                 AiToolExecutionContext.emitToolStep("product_query",
-                        "已检索到 " + products.size() + " 款匹配商品", detailDesc, "success");
+                        "已检索到 " + products.size() + " 款商品，推荐精选前 " + topProducts.size() + " 款", detailDesc, "success");
                 // 旁路直接向前端推送可交互商品卡片（带图片与一键下单按钮）
-                AiToolExecutionContext.emitProducts(products);
+                AiToolExecutionContext.emitProducts(topProducts);
 
                 // 返回给大模型精简版信息，节省 Token
-                return products.stream()
+                return topProducts.stream()
                         .map(this::formatCompactProduct)
                         .collect(Collectors.joining("\n"));
             } catch (Exception e) {
@@ -188,10 +185,18 @@ public class MallTools {
                     return "当前用户暂无订单记录";
                 }
                 List<Map<String, Object>> orders = result.getData();
+                String sf = (request != null && request.statusFilter() != null) ? request.statusFilter().trim().toUpperCase() : "ALL";
+                List<Map<String, Object>> filtered = ("ALL".equals(sf) || sf.isBlank())
+                        ? orders
+                        : orders.stream().filter(o -> sf.equalsIgnoreCase(String.valueOf(o.get("status")))).toList();
+                if (filtered.isEmpty()) {
+                    AiToolExecutionContext.emitToolStep("order_query", "未找到匹配状态的订单 (" + sf + ")", "用户ID: " + uid, "success");
+                    return "当前用户暂无状态为 " + sf + " 的订单记录";
+                }
                 AiToolExecutionContext.emitToolStep("order_query",
-                        "已查询到 " + orders.size() + " 笔订单", "用户ID: " + uid, "success");
-                return orders.stream()
-                        .limit(10)
+                        "已查询到 " + filtered.size() + " 笔订单" + (!"ALL".equals(sf) ? " (状态: " + sf + ")" : ""), "用户ID: " + uid, "success");
+                return filtered.stream()
+                        .limit(6)
                         .map(o -> String.format("- 订单号: %s | 商品: %s x%s | 总额: ¥%s | 状态: %s | 下单时间: %s",
                                 o.get("orderNo"), o.get("productName"), o.get("quantity"),
                                 o.get("totalAmount"), o.get("status"), o.get("createdAt")))
@@ -395,15 +400,18 @@ public class MallTools {
     }
 
     /**
-     * 将商品 Map 格式化为高信息密度、低 Token 消耗的文本摘要（剔除 imageUrl/createdAt/updatedAt/deleted）
+     * 将商品 Map 格式化为高信息密度、极低 Token 消耗的文本摘要（截断冗长描述）
      */
     private String formatCompactProduct(Map<String, Object> p) {
-        return String.format("[商品ID:%s] %s | 分类:%s | 价格:¥%s | 库存:%s | 描述:%s",
+        String desc = String.valueOf(p.getOrDefault("description", ""));
+        if (desc.length() > 30) {
+            desc = desc.substring(0, 30) + "...";
+        }
+        return String.format("[ID:%s] %s | 价格:¥%s | 库存:%s | 卖点:%s",
                 p.get("id"),
                 p.get("name"),
-                p.get("category"),
                 p.get("price"),
                 p.get("stock"),
-                p.get("description"));
+                desc);
     }
 }

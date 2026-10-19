@@ -35,7 +35,8 @@ export async function startAiStream(
     action: string;
     detail: string;
   }) => void,
-  image?: string | null
+  image?: string | null,
+  signal?: AbortSignal
 ) {
   try {
     const hasImage = Boolean(image && image.trim().length > 0);
@@ -77,7 +78,8 @@ export async function startAiStream(
         'Content-Type': 'application/json',
         ...(token ? { 'Authorization': `Bearer ${token}` } : {})
       },
-      body: JSON.stringify(requestPayload)
+      body: JSON.stringify(requestPayload),
+      signal
     });
 
     if (!response.ok) {
@@ -94,6 +96,10 @@ export async function startAiStream(
     let buffer = '';
 
     while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        return;
+      }
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -118,14 +124,32 @@ export async function startAiStream(
                 detail: eventObj.detail,
                 status: eventObj.status
               });
-              if (eventObj.status === 'running') {
-                const isVisual = eventObj.type === 'visual_analysis';
-                const isVector = eventObj.type === 'vector_search';
-                const isProduct = eventObj.type === 'product_query';
+              if (eventObj.status === 'running' || eventObj.status === 'success') {
+                let service: 'api-gateway' | 'ai-service' | 'product-service' | 'order-service' | 'user-service' | 'payment-service' = 'ai-service';
+                let protocol: 'HTTP/SSE' | 'OpenFeign RPC' | 'Dubbo TCP' | 'pgvector HNSW' = 'HTTP/SSE';
+                const stepType = eventObj.type;
+
+                if (stepType === 'vector_search') {
+                  service = 'ai-service';
+                  protocol = 'pgvector HNSW';
+                } else if (stepType === 'visual_analysis' || stepType === 'visual_cache_hit' || stepType === 'semantic_cache_hit' || stepType === 'failover_routing') {
+                  service = 'ai-service';
+                  protocol = 'HTTP/SSE';
+                } else if (stepType === 'product_query' || stepType === 'product_detail') {
+                  service = 'product-service';
+                  protocol = 'OpenFeign RPC';
+                } else if (stepType === 'auth_check') {
+                  service = 'api-gateway';
+                  protocol = 'HTTP/SSE';
+                } else {
+                  service = 'order-service';
+                  protocol = 'OpenFeign RPC';
+                }
+
                 onArchitectureLog?.({
-                  service: (isVisual || isVector) ? 'ai-service' : isProduct ? 'product-service' : 'order-service',
-                  protocol: isVisual ? 'HTTP/SSE' : isVector ? 'pgvector HNSW' : 'OpenFeign RPC',
-                  action: isVisual ? `Agent 1: ${eventObj.title}` : `AI Tool: ${eventObj.title}`,
+                  service,
+                  protocol,
+                  action: `${eventObj.title}`,
                   detail: eventObj.detail || ''
                 });
               }
@@ -163,6 +187,10 @@ export async function startAiStream(
 
     callbacks.onComplete();
   } catch (err: any) {
+    if (err.name === 'AbortError' || signal?.aborted) {
+      console.log('[AI Stream Aborted by User/New Request]');
+      return;
+    }
     console.error('[AI Stream Error]', err);
     onArchitectureLog?.({
       service: 'api-gateway',
@@ -176,15 +204,16 @@ export async function startAiStream(
       `小购已为您调出商城热门推荐与高性价比平替好物（见上方商品推荐卡片），您可以先挑选看看；\n` +
       `您也可以换个问题或重新发送试一下哦！`;
 
-    // 智能兜底商品卡片联动（保证 UI 不白屏、导购交易链条不断链）
+    // 智能兜底商品卡片联动（商品 ID 与数据库 real data 完全一致）
     try {
       const fallbackProducts = [
         {
-          id: 5,
-          name: '漫步者 (EDIFIER) W820NB 双金标头戴式主动降噪耳机 (高性价比平替)',
-          category: '数码外设',
+          id: 11,
+          name: '漫步者 W820NB 双金标头戴式无线降噪耳机 (平替款)',
+          category: '耳机',
           price: 299.0,
-          description: 'Hi-Res 双金标高清认证，-43dB 深度混合主动降噪，零压感专利耳套，50小时超长续航。',
+          stock: 200,
+          description: 'Hi-Res 双金标认证，-43dB 深度混合主动降噪，零压感专利耳套，50小时超长续航，三百元头戴降噪神级平替。',
           imageUrl: 'https://images.unsplash.com/photo-1546435770-a3e426bf472b?auto=format&fit=crop&w=600&q=80',
           tags: ['平替黑马', '双金标认证', '百元降噪王']
         },
@@ -193,16 +222,18 @@ export async function startAiStream(
           name: '李宁赤兔6 Pro 专业竞速跑步鞋 (性价比平替)',
           category: '运动鞋',
           price: 499.0,
-          description: '国产高性价比专业竞速训练鞋，全掌䨻科技中底，滚动感强，透气耐磨，千元内跑鞋平替首选。',
+          stock: 150,
+          description: '国产高性价比专业竞速训练鞋，全掌䨻科技中底，滚动感强，透气耐磨，适合进阶跑者日常拉练，千元内跑鞋平替首选。',
           imageUrl: 'https://images.unsplash.com/photo-1608231387042-66d1773070a5?auto=format&fit=crop&w=600&q=80',
           tags: ['千元内首选', '轻量回弹', '平替标杆']
         },
         {
-          id: 7,
-          name: '红米 Redmi Buds 5 Pro 真无线降噪耳机 (平替旗舰)',
-          category: '数码外设',
+          id: 13,
+          name: '红米 Redmi Buds 5 Pro 主动降噪蓝牙耳机 (平替款)',
+          category: '耳机',
           price: 399.0,
-          description: '52dB 深度降噪，4kHz 超宽频降噪频宽，圈瓷同轴双单元，LHDC 5.0 高清音频传输。',
+          stock: 160,
+          description: '52dB 深度主动降噪，圈瓷同轴双单元高解析音质，LHDC 5.0 超清传输协议，苹果 AirPods Pro 百元级平替。',
           imageUrl: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?auto=format&fit=crop&w=600&q=80',
           tags: ['52dB降噪', '同轴双单元', '百元卷王']
         }

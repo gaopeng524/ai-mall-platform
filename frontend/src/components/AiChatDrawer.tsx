@@ -6,6 +6,9 @@ import {
   Trash2, 
   Sparkles, 
   CheckCircle2, 
+  XCircle,
+  Zap,
+  ShieldCheck,
   Loader2, 
   Database, 
   Cpu, 
@@ -55,6 +58,14 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // 组件卸载或关闭时中止未完成的推流
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -179,6 +190,12 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
     setMessages((prev) => [...prev, userMessage, initialAssistantMessage]);
     setIsStreaming(true);
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     // 3. 启动流式传输
     await startAiStream(
       sessionId,
@@ -223,15 +240,18 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
         },
         onComplete: () => {
           setIsStreaming(false);
+          abortControllerRef.current = null;
           onOrderChanged?.();
         },
         onError: (err) => {
           console.error(err);
           setIsStreaming(false);
+          abortControllerRef.current = null;
         }
       },
       addLog,
-      currentImage
+      currentImage,
+      controller.signal
     );
   };
 
@@ -240,6 +260,11 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
   };
 
   const handleClearMemory = async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
     try {
       const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
       await fetch(`${targetBase}/api/ai/chat/session/${encodeURIComponent(sessionId)}`, {
@@ -357,9 +382,17 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                         <div className="p-1 rounded-lg bg-purple-100 text-purple-700 shrink-0">
                           <Eye className="w-3.5 h-3.5" />
                         </div>
+                      ) : (step.type === 'visual_cache_hit' || step.type === 'semantic_cache_hit') ? (
+                        <div className="p-1 rounded-lg bg-amber-100 text-amber-700 shrink-0">
+                          <Zap className="w-3.5 h-3.5" />
+                        </div>
                       ) : step.type === 'vector_search' ? (
                         <div className="p-1 rounded-lg bg-violet-100 text-violet-700 shrink-0">
                           <Database className="w-3.5 h-3.5" />
+                        </div>
+                      ) : step.type === 'auth_check' ? (
+                        <div className="p-1 rounded-lg bg-emerald-100 text-emerald-700 shrink-0">
+                          <ShieldCheck className="w-3.5 h-3.5" />
                         </div>
                       ) : (
                         <div className="p-1 rounded-lg bg-indigo-100 text-indigo-700 shrink-0">
@@ -374,6 +407,8 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                     <div className="shrink-0 ml-2">
                       {step.status === 'running' ? (
                         <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+                      ) : step.status === 'failed' ? (
+                        <XCircle className="w-4 h-4 text-rose-500" />
                       ) : (
                         <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                       )}
