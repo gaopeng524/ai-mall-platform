@@ -34,11 +34,23 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
     private String secret;
 
+    /** 严禁外部网关直接调用的内部微服务 RPC 端点（仅允许 Feign 容器内互通） */
+    private static final List<String> INTERNAL_BLOCKED_PATHS = List.of(
+            "/api/product/pre-deduct-stock",
+            "/api/product/sync-deduct-stock",
+            "/api/product/rollback-pre-stock",
+            "/api/product/deduct-stock",
+            "/api/product/rollback-stock",
+            "/api/order/pay-callback"
+    );
+
     /** 白名单：仅公开无需登录拦截的路径（商品浏览、注册登录、公开导购对话） */
     private static final List<String> WHITE_LIST = List.of(
             "/api/user/register",
             "/api/user/login",
-            "/api/product/**",          // 商品列表/详情公开浏览
+            "/api/product/search",
+            "/api/product/list",
+            "/api/product/*",           // 商品详情公开浏览
             "/api/ai/chat/stream",      // AI 智能导购流式对话（支持游客咨询体验）
             "/actuator/**"
     );
@@ -49,6 +61,17 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         String path = request.getURI().getPath();
+
+        // 0. 安全拦截：严禁外部客户端通过网关直接调用微服务内部 RPC 接口
+        boolean isInternalBlocked = INTERNAL_BLOCKED_PATHS.stream().anyMatch(p -> pathMatcher.match(p, path));
+        if (isInternalBlocked) {
+            log.warn("[网关安全防御拦截] 外部请求试图直接调用微服务内部 RPC 端点: path={}, ip={}",
+                    path, request.getRemoteAddress());
+            ServerHttpResponse response = exchange.getResponse();
+            response.setStatusCode(HttpStatus.FORBIDDEN);
+            return response.setComplete();
+        }
+
         boolean isWhite = WHITE_LIST.stream().anyMatch(p -> pathMatcher.match(p, path));
 
         // 1. 优先尝试解析 Authorization Header（确保已登录用户在访问白名单路由时也能正确透传真实身份）

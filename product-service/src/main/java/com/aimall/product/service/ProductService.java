@@ -229,6 +229,7 @@ public class ProductService {
     public boolean syncDeductStock(Long productId, Integer quantity) {
         int rows = productMapper.deductStock(productId, quantity);
         if (rows > 0) {
+            redisTemplate.delete(PRODUCT_CACHE_PREFIX + productId);
             return true;
         } else {
             // 异常兜底补偿：若 MySQL 扣减失败，反向补偿加回 Redis 预扣库存
