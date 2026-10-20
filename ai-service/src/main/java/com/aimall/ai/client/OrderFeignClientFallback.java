@@ -24,7 +24,7 @@ public class OrderFeignClientFallback implements OrderFeignClient {
     }
 
     @Override
-    public Result<Boolean> cancelOrder(String orderNo) {
+    public Result<Boolean> cancelOrder(String orderNo, Long userId) {
         return Result.fail("订单取消服务暂时不可用");
     }
 

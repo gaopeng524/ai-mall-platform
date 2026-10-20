@@ -533,11 +533,12 @@ public class OrderService {
             // 兼容容错：前端可能使用了 JS Date.now() 13位时间戳作为虚拟ID
             if (orderId > 1000000000000L) {
                 log.warn("[智能寻单] orderId={} 判定为前端虚拟时间戳，正在匹配最近一条待支付订单", orderId);
-                var query = new LambdaQueryWrapper<Order>()
-                        .eq(Order::getStatus, "PENDING");
-                if (userId != null && userId > 0) {
-                    query.eq(Order::getUserId, userId);
+                if (userId == null || userId <= 0) {
+                    return null; // 无属主身份时绝对禁止模糊匹配他人待支付订单
                 }
+                var query = new LambdaQueryWrapper<Order>()
+                        .eq(Order::getStatus, "PENDING")
+                        .eq(Order::getUserId, userId);
                 return orderMapper.selectOne(
                         query.orderByDesc(Order::getId).last("LIMIT 1")
                 );

@@ -269,7 +269,7 @@ public class MallTools {
                     AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：越权访问", "无权取消他人订单", "failed");
                     return "【权限拦截】您无权取消他人的订单！";
                 }
-                var result = orderFeignClient.cancelOrder(orderNo);
+                var result = orderFeignClient.cancelOrder(orderNo, uid);
                 if (result != null && result.isSuccess() && Boolean.TRUE.equals(result.getData())) {
                     AiToolExecutionContext.emitToolStep("order_cancel", "订单已取消，库存已归还", "订单号: " + orderNo, "success");
                     return "订单 " + orderNo + " 已成功取消，锁定的商品库存已自动归还。";

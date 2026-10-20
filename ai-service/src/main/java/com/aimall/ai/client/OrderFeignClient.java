@@ -30,7 +30,9 @@ public interface OrderFeignClient {
     Result<Map<String, Object>> getOrderDetail(@PathVariable("orderNo") String orderNo);
 
     @PostMapping("/order/cancel")
-    Result<Boolean> cancelOrder(@RequestParam("orderNo") String orderNo);
+    Result<Boolean> cancelOrder(
+            @RequestParam("orderNo") String orderNo,
+            @RequestParam(value = "userId", required = false) Long userId);
 
     @PostMapping("/cart/add")
     Result<Map<String, Object>> addToCart(@RequestBody Map<String, Object> body);

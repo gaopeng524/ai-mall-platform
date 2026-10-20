@@ -95,6 +95,9 @@ public class AiShoppingService {
     private static final String REDIS_QUERY_CACHE_PREFIX = "ai:cache:query:";
     private static final Duration QUERY_CACHE_TTL = Duration.ofHours(6);
 
+    private static final String REDIS_SESSION_ACTIVE_LOCK_PREFIX = "ai:session:lock:";
+    private static final Duration SESSION_LOCK_TTL = Duration.ofSeconds(90);
+
     /** 本地会话历史兜底容器（Caffeine 缓存，最大 1000 会话，TTL 30 分钟，杜绝内存泄漏） */
     private final Cache<String, List<Message>> fallbackMemoryCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -219,6 +222,30 @@ public class AiShoppingService {
             Schedulers.boundedElastic().schedule(() -> {
                 boolean callSucceeded = false;
                 boolean isFailoverTriggered = false;
+
+                // 同一会话并发互斥锁：防止同一会话多请求并发导致历史记忆覆盖、注册表串流与工具状态错乱
+                boolean lockAcquired = false;
+                try {
+                    Boolean ok = stringRedisTemplate.opsForValue().setIfAbsent(
+                            REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId,
+                            traceId,
+                            SESSION_LOCK_TTL
+                    );
+                    lockAcquired = Boolean.TRUE.equals(ok);
+                } catch (Exception e) {
+                    log.warn("[AI Session Lock] Redis 锁异常降级: {}", e.getMessage());
+                    lockAcquired = true; // Redis 异常时平滑降级放行
+                }
+
+                if (!lockAcquired) {
+                    log.warn("[AI Session 并发拦截] 会话 {} 正在生成上一条回答中，拒绝并发抢占", effectiveSessionId);
+                    if (!isCancelled.get()) {
+                        sink.next(AiToolExecutionContext.formatChunkEvent("小购正在为您思考并回答上一个问题，请稍等片刻再提问哦～"));
+                        sink.complete();
+                    }
+                    heartbeatExecutor.shutdown();
+                    return;
+                }
 
                 AiToolExecutionContext.bind(effectiveSessionId, effectiveUserId, traceId, chunk -> {
                     if (!isCancelled.get()) {
@@ -543,6 +570,13 @@ public class AiShoppingService {
                         sink.complete();
                     }
                 } finally {
+                    try {
+                        String lockHolder = stringRedisTemplate.opsForValue().get(REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId);
+                        if (traceId.equals(lockHolder)) {
+                            stringRedisTemplate.delete(REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId);
+                        }
+                    } catch (Exception ignored) {
+                    }
                     heartbeatExecutor.shutdown();
                     AiToolExecutionContext.clear(effectiveSessionId, effectiveUserId);
                     TraceContext.clear();
