@@ -118,7 +118,7 @@ services:
       - REDIS_HOST=redis
       - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     depends_on:
       - nacos
       - mysql
@@ -138,7 +138,7 @@ services:
       - REDIS_HOST=redis
       - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
     depends_on:
       - nacos
       - mysql
@@ -159,7 +159,7 @@ services:
       - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
       - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
     ports:
-      - "8083:8083"
+      - "127.0.0.1:8083:8083"
     depends_on:
       - nacos
       - mysql
@@ -181,7 +181,7 @@ services:
       - ROCKETMQ_NAMESRV=rocketmq-namesrv:9876
       - SPRING_CLOUD_NACOS_CONFIG_IMPORT_CHECK_ENABLED=false
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     depends_on:
       - nacos
       - mysql
@@ -209,7 +209,7 @@ services:
       - CHAT_MODEL=${CHAT_MODEL:-qwen3.7-flash}
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode}
     ports:
-      - "8084:8084"
+      - "127.0.0.1:8084:8084"
     depends_on:
       - nacos
       - postgres

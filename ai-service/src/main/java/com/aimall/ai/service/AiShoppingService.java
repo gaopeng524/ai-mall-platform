@@ -175,6 +175,9 @@ public class AiShoppingService {
                     log.warn("[AI Session] 用户 {} 尝试读取归属于用户 {} 的会话 {}，自动沙箱隔离", effectiveUserId, owner, safeSessionId);
                     safeSessionId = safeSessionId + "_sub_" + (effectiveUserId != null ? effectiveUserId : "guest");
                 }
+            } else if (effectiveUserId != null && effectiveUserId > 0) {
+                // 首次创建会话，原子占位绑定所有者，防止并发抢占
+                stringRedisTemplate.opsForValue().setIfAbsent(REDIS_SESSION_OWNER_PREFIX + safeSessionId, String.valueOf(effectiveUserId), MEMORY_TTL);
             }
         } catch (Exception ignored) {
         }
@@ -206,7 +209,7 @@ public class AiShoppingService {
                     return;
                 }
                 try {
-                    sink.next(": ping\n\n");
+                    sink.next(AiToolExecutionContext.formatPingEvent());
                 } catch (Exception ignored) {
                     heartbeatExecutor.shutdown();
                 }
@@ -407,9 +410,18 @@ public class AiShoppingService {
                         }
                         promptMessages.add(new UserMessage(actualAgentPrompt));
 
+                        Map<String, Object> toolCtx = new HashMap<>();
+                        toolCtx.put("sessionId", effectiveSessionId);
+                        if (effectiveUserId != null) {
+                            toolCtx.put("userId", effectiveUserId);
+                        }
+                        if (traceId != null) {
+                            toolCtx.put("traceId", traceId);
+                        }
+
                         var requestSpec = chatClient.prompt()
                                 .messages(promptMessages)
-                                .toolContext(Map.of("sessionId", effectiveSessionId));
+                                .toolContext(toolCtx);
 
                         Flux<String> streamFlux = requestSpec
                                 .functions(
@@ -532,7 +544,7 @@ public class AiShoppingService {
                     }
                 } finally {
                     heartbeatExecutor.shutdown();
-                    AiToolExecutionContext.clear(effectiveSessionId);
+                    AiToolExecutionContext.clear(effectiveSessionId, effectiveUserId);
                     TraceContext.clear();
                     long duration = System.currentTimeMillis() - startTime;
                     final boolean succeeded = callSucceeded;

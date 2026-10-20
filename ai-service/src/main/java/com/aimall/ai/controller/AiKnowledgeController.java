@@ -29,9 +29,12 @@ public class AiKnowledgeController {
             return Result.fail(403, "无权限操作，仅管理员可触发知识库初始化");
         }
         int count = knowledgeService.initDefaultKnowledgeBase();
+        if (count == 0) {
+            return Result.fail(500, "知识库初始化失败，写入条数为 0");
+        }
         return Result.success("知识库初始化完成", Map.of(
                 "insertedDocuments", count,
-                "status", count > 0 ? "SUCCESS" : "EMPTY"
+                "status", "SUCCESS"
         ));
     }
 
@@ -44,9 +47,12 @@ public class AiKnowledgeController {
             return Result.fail(403, "无权限操作，仅管理员可触发商品知识库同步");
         }
         int count = knowledgeService.syncFromProductService();
+        if (count == 0) {
+            return Result.fail(500, "在售商品知识库同步失败，写入条数为 0");
+        }
         return Result.success("在售商品知识库同步完成", Map.of(
                 "syncedProducts", count,
-                "status", count > 0 ? "SUCCESS" : "EMPTY"
+                "status", "SUCCESS"
         ));
     }
 

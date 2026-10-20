@@ -363,7 +363,7 @@ public class OrderService {
         }
 
         boolean isAdmin = UserContext.isAdmin(userRole);
-        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+        if (!isAdmin && (userId == null || userId <= 0 || !userId.equals(order.getUserId()))) {
             throw new BusinessException(403, "无权支付他人的订单");
         }
 
@@ -396,7 +396,7 @@ public class OrderService {
         }
 
         boolean isAdmin = UserContext.isAdmin(userRole);
-        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+        if (!isAdmin && (userId == null || userId <= 0 || !userId.equals(order.getUserId()))) {
             throw new BusinessException(403, "无权取消他人的订单");
         }
 
@@ -485,7 +485,7 @@ public class OrderService {
         }
 
         boolean isAdmin = UserContext.isAdmin(userRole);
-        if (!isAdmin && userId != null && userId > 0 && !userId.equals(order.getUserId())) {
+        if (!isAdmin && (userId == null || userId <= 0 || !userId.equals(order.getUserId()))) {
             throw new BusinessException(403, "无权确认收货他人的订单");
         }
 

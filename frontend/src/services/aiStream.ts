@@ -115,6 +115,10 @@ export async function startAiStream(
         if (rawPayload.startsWith(AI_EVENT_PREFIX)) {
           try {
             const eventObj = JSON.parse(rawPayload.substring(AI_EVENT_PREFIX.length));
+            if (eventObj.event === 'ping') {
+              // 忽略定时心跳帧，保持连接同时杜绝心跳字符污染对话
+              continue;
+            }
             if (eventObj.event === 'chunk' && typeof eventObj.text === 'string') {
               callbacks.onChunk(eventObj.text);
             } else if (eventObj.event === 'tool_step') {

@@ -1,6 +1,7 @@
 package com.aimall.ai.service;
 
 import com.aimall.ai.client.ProductFeignClient;
+import com.aimall.common.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -46,6 +47,31 @@ public class KnowledgeService implements ApplicationRunner {
     }
 
     /**
+     * 创建或修复 pgvector 1024 维表结构及 HNSW 索引
+     */
+    public void createVectorTableIfNotExists() {
+        try {
+            jdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS vector;");
+            jdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS vector_store (
+                    id uuid DEFAULT uuid_generate_v4() PRIMARY KEY,
+                    content text,
+                    metadata json,
+                    embedding vector(1024)
+                );
+            """);
+            jdbcTemplate.execute("""
+                CREATE INDEX IF NOT EXISTS vector_store_embedding_hnsw_idx 
+                ON vector_store USING hnsw (embedding vector_cosine_ops);
+            """);
+            log.info("[AI RAG 知识库] pgvector 1024 维表结构与 HNSW 索引就绪");
+        } catch (Exception e) {
+            log.error("[AI RAG 知识库] 创建 vector_store 表结构异常: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * 校验并自动修复 pgvector 表结构（针对历史遗留的 1536 维字段自动重置为 1024 维）
      */
     public void ensureVectorSchema() {
@@ -61,10 +87,12 @@ public class KnowledgeService implements ApplicationRunner {
             if (typmod != null && typmod != 1024) {
                 log.warn("[AI RAG 知识库] 检测到 pgvector 字段维度为 {}，与 text-embedding-v3(1024) 不匹配，正在重置重建表...", typmod);
                 jdbcTemplate.execute("DROP TABLE IF EXISTS vector_store CASCADE;");
-                log.info("[AI RAG 知识库] 维度不匹配的旧表已清理，准备由 PgVectorStore 重新按 1024 维建表");
+                createVectorTableIfNotExists();
+                log.info("[AI RAG 知识库] 维度不匹配的旧表已清理并立即重建 1024 维表");
             }
         } catch (Exception e) {
-            log.debug("[AI RAG 知识库] 表结构检测略过: {}", e.getMessage());
+            log.info("[AI RAG 知识库] 表不存在或未初始化，正在初始化 1024 维向量表: {}", e.getMessage());
+            createVectorTableIfNotExists();
         }
     }
 
@@ -175,7 +203,12 @@ public class KnowledgeService implements ApplicationRunner {
                 Map.of("category", "平台规则", "type", "faq", "tags", "超时关单,秒杀,库存回滚,购物车")
         ));
 
-        return batchAddDocuments(docs, 6);
+        int added = batchAddDocuments(docs, 6);
+        if (added == 0) {
+            log.error("[AI RAG 知识库] 初始化默认知识库失败：写入文档数为 0");
+            throw new BusinessException(500, "初始化知识库失败，向量写入条数为 0，请检查 pgvector 连通性与模型配置");
+        }
+        return added;
     }
 
     /**

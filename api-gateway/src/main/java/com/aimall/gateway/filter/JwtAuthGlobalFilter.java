@@ -34,14 +34,15 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
     @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
     private String secret;
 
-    /** 严禁外部网关直接调用的内部微服务 RPC 端点（仅允许 Feign 容器内互通） */
+    /** 严禁外部网关直接调用的内部微服务 RPC 端点与 serviceId 路径（仅允许内部网络 Feign 互通） */
     private static final List<String> INTERNAL_BLOCKED_PATHS = List.of(
-            "/api/product/pre-deduct-stock",
-            "/api/product/sync-deduct-stock",
-            "/api/product/rollback-pre-stock",
-            "/api/product/deduct-stock",
-            "/api/product/rollback-stock",
-            "/api/order/pay-callback"
+            "/**/product/pre-deduct-stock",
+            "/**/product/sync-deduct-stock",
+            "/**/product/rollback-pre-stock",
+            "/**/product/deduct-stock",
+            "/**/product/rollback-stock",
+            "/**/order/pay-callback",
+            "/*-service/**"
     );
 
     /** 白名单：仅公开无需登录拦截的路径（商品浏览、注册登录、公开导购对话） */
@@ -88,12 +89,13 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
                     String username = claims.get("username", String.class);
                     String role = claims.get("role", String.class);
 
-                    // 剥离客户端伪造的 X-User-* 头，强制注入经由 JWT 验签合法的用户身份
+                    // 剥离客户端伪造的 X-User-* 及内部 RPC 凭据头，强制注入经由 JWT 验签合法的用户身份
                     ServerHttpRequest mutatedRequest = request.mutate()
                             .headers(headers -> {
                                 headers.remove("X-User-Id");
                                 headers.remove("X-Username");
                                 headers.remove("X-User-Role");
+                                headers.remove("X-Internal-Token");
                             })
                             .header("X-User-Id", userId != null ? userId : "")
                             .header("X-Username", username != null ? username : "")
@@ -119,6 +121,7 @@ public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
                         headers.remove("X-User-Id");
                         headers.remove("X-Username");
                         headers.remove("X-User-Role");
+                        headers.remove("X-Internal-Token");
                     })
                     .build();
             return chain.filter(exchange.mutate().request(sanitizedRequest).build());

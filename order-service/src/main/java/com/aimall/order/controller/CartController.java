@@ -3,14 +3,17 @@ package com.aimall.order.controller;
 import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.result.Result;
+import com.aimall.common.security.InternalRpcSecurity;
 import com.aimall.order.dto.CartAddDTO;
 import com.aimall.order.dto.CartCheckDTO;
 import com.aimall.order.dto.CartUpdateDTO;
 import com.aimall.order.service.CartService;
 import com.aimall.order.vo.CartCheckoutVO;
 import com.aimall.order.vo.CartVO;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -25,15 +28,18 @@ public class CartController {
 
     private final CartService cartService;
 
+    @Autowired
+    private HttpServletRequest request;
+
     private Long resolveEffectiveUserId(Long requestedUserId) {
         Long uid = UserContext.getUserId();
-        if (uid == null) {
-            uid = requestedUserId;
+        if (uid != null && uid > 0) {
+            return uid;
         }
-        if (uid == null || uid <= 0) {
-            throw new BusinessException(401, "请先登录商城账号后再进行购物车操作");
+        if (request != null && InternalRpcSecurity.isInternalRpc(request) && requestedUserId != null && requestedUserId > 0) {
+            return requestedUserId;
         }
-        return uid;
+        throw new BusinessException(401, "请先登录商城账号后再进行购物车操作");
     }
 
     /**

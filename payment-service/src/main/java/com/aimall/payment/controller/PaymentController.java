@@ -3,13 +3,16 @@ package com.aimall.payment.controller;
 import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.result.Result;
+import com.aimall.common.security.InternalRpcSecurity;
 import com.aimall.payment.dto.MockPaySubmitDTO;
 import com.aimall.payment.dto.PayCreateDTO;
 import com.aimall.payment.service.PaymentService;
 import com.aimall.payment.vo.PayResultVO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 @Slf4j
@@ -20,13 +23,16 @@ public class PaymentController {
 
     private final PaymentService paymentService;
 
+    @Autowired
+    private HttpServletRequest request;
+
     /**
      * 1. 唤起收银台：生成支付流水单 (状态: INIT)
      */
     @PostMapping("/create")
     public Result<PayResultVO> createPayment(@Valid @RequestBody PayCreateDTO dto) {
         Long uid = UserContext.getUserId();
-        if (uid == null) {
+        if (uid == null && request != null && InternalRpcSecurity.isInternalRpc(request)) {
             uid = dto.getUserId();
         }
         if (uid == null || uid <= 0) {

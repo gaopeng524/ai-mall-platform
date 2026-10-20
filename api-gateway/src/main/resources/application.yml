@@ -33,8 +33,7 @@ spring:
           max-idle-time: 30s
       discovery:
         locator:
-          enabled: true           # 开启服务发现路由
-          lower-case-service-id: true
+          enabled: false          # 严格禁用 serviceId 自动路由，防止绕过网关过滤器直接访问微服务内部端点
       routes:
         # 用户服务
         - id: user-service

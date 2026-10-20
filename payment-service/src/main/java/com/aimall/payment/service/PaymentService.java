@@ -55,7 +55,7 @@ public class PaymentService {
 
         // 归属校验：非 ADMIN 时不允许为他人订单创建支付流水
         String role = UserContext.getUserRole();
-        if (dto.getUserId() != null && !UserContext.isAdmin(role) && !dto.getUserId().equals(userId)) {
+        if (!UserContext.isAdmin(role) && (dto.getUserId() == null || !dto.getUserId().equals(userId))) {
             throw new BusinessException(403, "无权为他人订单发起支付");
         }
 
@@ -142,7 +142,7 @@ public class PaymentService {
         // 归属校验：非 ADMIN 时不允许操作他人支付流水
         Long currentUserId = UserContext.getUserId();
         String role = UserContext.getUserRole();
-        if (currentUserId != null && !UserContext.isAdmin(role) && !currentUserId.equals(record.getUserId())) {
+        if (!UserContext.isAdmin(role) && (currentUserId == null || !currentUserId.equals(record.getUserId()))) {
             throw new BusinessException(403, "无权操作他人的支付流水");
         }
 
@@ -272,7 +272,7 @@ public class PaymentService {
 
         Long currentUserId = UserContext.getUserId();
         String role = UserContext.getUserRole();
-        if (currentUserId != null && !UserContext.isAdmin(role) && !currentUserId.equals(record.getUserId())) {
+        if (!UserContext.isAdmin(role) && (currentUserId == null || !currentUserId.equals(record.getUserId()))) {
             throw new BusinessException(403, "无权查看他人的支付流水");
         }
 

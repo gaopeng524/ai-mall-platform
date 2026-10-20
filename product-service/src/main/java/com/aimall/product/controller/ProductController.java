@@ -1,8 +1,10 @@
 package com.aimall.product.controller;
 
 import com.aimall.common.result.Result;
+import com.aimall.common.security.InternalRpcSecurity;
 import com.aimall.product.entity.Product;
 import com.aimall.product.service.ProductService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -43,7 +45,9 @@ public class ProductController {
     @PostMapping("/pre-deduct-stock")
     public Result<Boolean> preDeductStock(
             @RequestParam("productId") Long productId,
-            @RequestParam("quantity") Integer quantity) {
+            @RequestParam("quantity") Integer quantity,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         log.info("[Feign RPC 内存预扣] 收到扣库存请求: productId={}, quantity={}", productId, quantity);
         boolean success = productService.preDeductStock(productId, quantity);
         return Result.success(success);
@@ -55,7 +59,9 @@ public class ProductController {
     @PostMapping("/sync-deduct-stock")
     public Result<Boolean> syncDeductStock(
             @RequestParam("productId") Long productId,
-            @RequestParam("quantity") Integer quantity) {
+            @RequestParam("quantity") Integer quantity,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         log.info("[Feign RPC 异步落库] 扣减 MySQL 库存: productId={}, quantity={}", productId, quantity);
         boolean success = productService.syncDeductStock(productId, quantity);
         return Result.success(success);
@@ -67,7 +73,9 @@ public class ProductController {
     @PostMapping("/rollback-pre-stock")
     public Result<Boolean> rollbackPreStock(
             @RequestParam("productId") Long productId,
-            @RequestParam("quantity") Integer quantity) {
+            @RequestParam("quantity") Integer quantity,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         log.info("[Feign RPC 内存回滚] 回滚 Redis 预扣库存: productId={}, quantity={}", productId, quantity);
         boolean success = productService.rollbackPreStock(productId, quantity);
         return Result.success(success);
@@ -79,7 +87,9 @@ public class ProductController {
     @PostMapping("/deduct-stock")
     public Result<Boolean> deductStock(
             @RequestParam("productId") Long productId,
-            @RequestParam("quantity") Integer quantity) {
+            @RequestParam("quantity") Integer quantity,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         log.info("[Feign RPC 同步扣减] 收到扣库存请求: productId={}, quantity={}", productId, quantity);
         boolean success = productService.deductStock(productId, quantity);
         return Result.success(success);
@@ -91,7 +101,9 @@ public class ProductController {
     @PostMapping("/rollback-stock")
     public Result<Boolean> rollbackStock(
             @RequestParam("productId") Long productId,
-            @RequestParam("quantity") Integer quantity) {
+            @RequestParam("quantity") Integer quantity,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         log.info("[Feign RPC 库存归还] 收到释放库存请求: productId={}, quantity={}", productId, quantity);
         boolean success = productService.rollbackStock(productId, quantity);
         return Result.success(success);

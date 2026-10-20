@@ -44,6 +44,11 @@ public class AiToolExecutionContext {
     /** 会话全局注册表（针对显式 sessionId 检索提供映射） */
     private static final Map<String, SessionContext> SESSION_REGISTRY = new ConcurrentHashMap<>();
 
+    private static String getRegistryKey(String sessionId, Long userId) {
+        String uidStr = (userId != null && userId > 0) ? String.valueOf(userId) : "guest";
+        return uidStr + ":" + (sessionId != null ? sessionId : "default");
+    }
+
     /**
      * 绑定当前 SSE 会话上下文
      */
@@ -56,6 +61,7 @@ public class AiToolExecutionContext {
                 .build();
         THREAD_CONTEXT.set(ctx);
         if (sessionId != null) {
+            SESSION_REGISTRY.put(getRegistryKey(sessionId, userId), ctx);
             SESSION_REGISTRY.put(sessionId, ctx);
         }
         if (userId != null && userId > 0) {
@@ -72,8 +78,13 @@ public class AiToolExecutionContext {
      * 清除会话上下文
      */
     public static void clear(String sessionId) {
+        clear(sessionId, null);
+    }
+
+    public static void clear(String sessionId, Long userId) {
         THREAD_CONTEXT.remove();
         if (sessionId != null) {
+            SESSION_REGISTRY.remove(getRegistryKey(sessionId, userId));
             SESSION_REGISTRY.remove(sessionId);
         }
         UserContext.clear();
@@ -110,16 +121,37 @@ public class AiToolExecutionContext {
      */
     public static <T> T executeInToolContext(org.springframework.ai.chat.model.ToolContext toolContext, ToolAction<T> action) {
         String sessionId = null;
+        Long explicitUserId = null;
+        String explicitTraceId = null;
+
         if (toolContext != null && toolContext.getContext() != null) {
             Object sid = toolContext.getContext().get("sessionId");
             if (sid != null) {
                 sessionId = sid.toString();
             }
+            Object uid = toolContext.getContext().get("userId");
+            if (uid instanceof Number n) {
+                explicitUserId = n.longValue();
+            } else if (uid != null) {
+                try {
+                    explicitUserId = Long.parseLong(uid.toString());
+                } catch (Exception ignored) {
+                }
+            }
+            Object tid = toolContext.getContext().get("traceId");
+            if (tid != null) {
+                explicitTraceId = tid.toString();
+            }
         }
 
         SessionContext targetCtx = null;
         if (sessionId != null) {
-            targetCtx = SESSION_REGISTRY.get(sessionId);
+            if (explicitUserId != null && explicitUserId > 0) {
+                targetCtx = SESSION_REGISTRY.get(getRegistryKey(sessionId, explicitUserId));
+            }
+            if (targetCtx == null) {
+                targetCtx = SESSION_REGISTRY.get(sessionId);
+            }
         }
         if (targetCtx == null) {
             targetCtx = THREAD_CONTEXT.get();
@@ -130,19 +162,27 @@ public class AiToolExecutionContext {
         String prevTrace = TraceContext.getTraceId();
 
         try {
+            Long effectiveUserId = explicitUserId;
+            if (effectiveUserId == null && targetCtx != null) {
+                effectiveUserId = targetCtx.getUserId();
+            }
+
             if (targetCtx != null) {
                 THREAD_CONTEXT.set(targetCtx);
-                if (targetCtx.getUserId() != null && targetCtx.getUserId() > 0) {
-                    UserContext.set(new UserContext.UserInfo(targetCtx.getUserId(), null, null));
-                } else {
-                    UserContext.clear();
-                }
-                if (targetCtx.getTraceId() != null) {
-                    TraceContext.setTraceId(targetCtx.getTraceId());
-                }
+            }
+
+            if (effectiveUserId != null && effectiveUserId > 0) {
+                UserContext.set(new UserContext.UserInfo(effectiveUserId, null, null));
             } else {
-                THREAD_CONTEXT.remove();
                 UserContext.clear();
+            }
+
+            String effectiveTrace = explicitTraceId;
+            if (effectiveTrace == null && targetCtx != null) {
+                effectiveTrace = targetCtx.getTraceId();
+            }
+            if (effectiveTrace != null) {
+                TraceContext.setTraceId(effectiveTrace);
             }
             return action.execute();
         } catch (Exception e) {
@@ -183,6 +223,13 @@ public class AiToolExecutionContext {
             return uid;
         }
         return null;
+    }
+
+    /**
+     * 格式化 SSE 心跳保持帧（结构化事件，避免直接发送 ": ping" 污染打字机回答）
+     */
+    public static String formatPingEvent() {
+        return AI_EVENT_PREFIX + "{\"event\":\"ping\"}";
     }
 
     /**

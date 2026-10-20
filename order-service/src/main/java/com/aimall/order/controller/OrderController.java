@@ -3,8 +3,10 @@ package com.aimall.order.controller;
 import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.result.Result;
+import com.aimall.common.security.InternalRpcSecurity;
 import com.aimall.order.entity.Order;
 import com.aimall.order.service.OrderService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +21,17 @@ public class OrderController {
 
     private final OrderService orderService;
 
+    private Long resolveAuthorizedUserId(Long paramUserId, HttpServletRequest request) {
+        Long currentUserId = UserContext.getUserId();
+        if (currentUserId != null && currentUserId > 0) {
+            return currentUserId;
+        }
+        if (InternalRpcSecurity.isInternalRpc(request) && paramUserId != null && paramUserId > 0) {
+            return paramUserId;
+        }
+        throw new BusinessException(401, "请先登录商城账号后再进行操作");
+    }
+
     /**
      * 创建订单接口（供前端商城网关路由与 AI Agent 工具跨服务调用）
      * 支持根据 isSeckill 自动切换【秒杀极速通道 (10,271 QPS)】或【普通订单事务消息通道 (2,000+ QPS 2PC强一致性)】
@@ -29,14 +42,9 @@ public class OrderController {
             @RequestParam("productId") Long productId,
             @RequestParam(value = "quantity", required = false, defaultValue = "1") Integer quantity,
             @RequestParam(value = "userId", required = false) Long userId,
-            @RequestParam(value = "isSeckill", required = false, defaultValue = "false") Boolean isSeckill) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
-        if (effectiveUserId == null || effectiveUserId <= 0) {
-            throw new BusinessException(401, "请先登录商城账号后再下单购买");
-        }
+            @RequestParam(value = "isSeckill", required = false, defaultValue = "false") Boolean isSeckill,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         String orderNo = orderService.createOrder(productId, quantity, effectiveUserId, isSeckill);
         return Result.success("订单创建成功", orderNo);
     }
@@ -48,14 +56,9 @@ public class OrderController {
     public Result<String> createSeckillOrder(
             @RequestParam("productId") Long productId,
             @RequestParam(value = "quantity", required = false, defaultValue = "1") Integer quantity,
-            @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
-        if (effectiveUserId == null || effectiveUserId <= 0) {
-            throw new BusinessException(401, "请先登录商城账号后再参与秒杀");
-        }
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         String orderNo = orderService.createOrder(productId, quantity, effectiveUserId, true);
         return Result.success("秒杀排队成功", orderNo);
     }
@@ -65,14 +68,9 @@ public class OrderController {
      */
     @GetMapping("/list")
     public Result<List<Order>> getUserOrders(
-            @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
-        if (effectiveUserId == null || effectiveUserId <= 0) {
-            throw new BusinessException(401, "请先登录商城账号后查看订单列表");
-        }
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         log.info("[订单列表查询] 收到请求: userId={}", effectiveUserId);
         return Result.success(orderService.getUserOrders(effectiveUserId));
     }
@@ -84,11 +82,9 @@ public class OrderController {
     public Result<Boolean> payOrder(
             @RequestParam(value = "orderId", required = false) Long orderId,
             @RequestParam(value = "orderNo", required = false) String orderNo,
-            @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         String role = UserContext.getUserRole();
         boolean success = orderService.payOrder(orderId, orderNo, effectiveUserId, role);
         return Result.success("支付成功", success);
@@ -101,11 +97,9 @@ public class OrderController {
     public Result<Boolean> cancelOrder(
             @RequestParam(value = "orderId", required = false) Long orderId,
             @RequestParam(value = "orderNo", required = false) String orderNo,
-            @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         String role = UserContext.getUserRole();
         boolean success = orderService.cancelOrder(orderId, orderNo, effectiveUserId, role);
         return Result.success("订单已取消，库存已归还", success);
@@ -134,11 +128,9 @@ public class OrderController {
     public Result<Boolean> completeOrder(
             @RequestParam(value = "orderId", required = false) Long orderId,
             @RequestParam(value = "orderNo", required = false) String orderNo,
-            @RequestParam(value = "userId", required = false) Long userId) {
-        Long effectiveUserId = UserContext.getUserId();
-        if (effectiveUserId == null) {
-            effectiveUserId = userId;
-        }
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
         String role = UserContext.getUserRole();
         boolean success = orderService.completeOrder(orderId, orderNo, effectiveUserId, role);
         return Result.success("确认收货成功，交易圆满完成", success);
@@ -148,17 +140,23 @@ public class OrderController {
      * 根据订单号查询订单明细（供 payment-service 与收银台查询，校验归属）
      */
     @GetMapping("/detail/{orderNo}")
-    public Result<Order> getOrderDetail(@PathVariable("orderNo") String orderNo) {
+    public Result<Order> getOrderDetail(
+            @PathVariable("orderNo") String orderNo,
+            HttpServletRequest request) {
         Order order = orderService.getOrderByOrderNo(orderNo);
         if (order == null) {
             return Result.fail("订单不存在");
         }
+        if (InternalRpcSecurity.isInternalRpc(request)) {
+            return Result.success(order);
+        }
         Long currentUserId = UserContext.getUserId();
         String role = UserContext.getUserRole();
-        if (currentUserId != null && !UserContext.isAdmin(role)) {
-            if (!currentUserId.equals(order.getUserId())) {
-                throw new BusinessException(403, "无权查看他人的订单明细");
-            }
+        if (currentUserId == null) {
+            throw new BusinessException(401, "请先登录商城账号后再查看订单明细");
+        }
+        if (!UserContext.isAdmin(role) && !currentUserId.equals(order.getUserId())) {
+            throw new BusinessException(403, "无权查看他人的订单明细");
         }
         return Result.success(order);
     }
@@ -171,7 +169,9 @@ public class OrderController {
             @RequestParam("orderNo") String orderNo,
             @RequestParam("paySn") String paySn,
             @RequestParam("tradeNo") String tradeNo,
-            @RequestParam(value = "payChannel", defaultValue = "MOCK") String payChannel) {
+            @RequestParam(value = "payChannel", defaultValue = "MOCK") String payChannel,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
         int code = orderService.handlePayCallback(orderNo, paySn, tradeNo, payChannel);
         if (code == 1) {
             return Result.success("订单支付状态流转成功 (PAID)", 1);
