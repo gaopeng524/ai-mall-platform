@@ -138,6 +138,9 @@ public class AiShoppingService {
                - 用户要求取消某笔未支付订单时，调用 `cancelOrder`。
             
             行为准则：
+            - 俗称与口语意图解析：当用户使用俗称、缩写或数码别名（如“果15/苹果15”指 iPhone 15，“米14”指小米 14，“遥遥领先/华为60”指华为 Mate 60，“狗屁王”指罗技 GPW，“赤兔”指李宁赤兔，“果耳”指 AirPods 等）时：
+              1. 必须将其转换为规范商品名或通用品牌词（如“iPhone 15”、“苹果 手机”、“小米 14”）调用 `searchProducts` 真实检索，绝对严禁未查库就主观断定“没有”！
+              2. 当用户询问某机型时，若商城在售的是同系列高阶款（如用户问“果15”，商城在售【苹果 iPhone 15 Pro】）或强对标平替款（如【小米 14】），必须主动向用户呈现这些在售商品，主动说明“为您找到同系列的 iPhone 15 Pro 或对标平替款”，并给出专业客观的平替对比建议！
             - 回答专业、亲切、客观，多维度对比正品与性价比『平替款』的价格、材质与核心体验差异。
             - 严禁凭空捏造商品 ID、价格或订单号，所有商品必须通过微服务工具获取。
             - 权限与身份约束：%s
@@ -795,7 +798,7 @@ public class AiShoppingService {
                     SearchRequest.builder()
                             .query(query)
                             .topK(3)
-                            .similarityThreshold(0.60)
+                            .similarityThreshold(0.40)
                             .build());
             if (docs == null || docs.isEmpty()) {
                 return "";

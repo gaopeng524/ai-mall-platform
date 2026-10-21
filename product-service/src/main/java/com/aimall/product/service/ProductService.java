@@ -17,8 +17,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import java.math.BigDecimal;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -58,6 +57,51 @@ public class ProductService {
 
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
+    private static final Map<String, String> ALIAS_MAP = Map.ofEntries(
+            Map.entry("果15", "苹果 15"),
+            Map.entry("果子15", "苹果 15"),
+            Map.entry("果子", "苹果"),
+            Map.entry("米14", "小米 14"),
+            Map.entry("红米70", "红米 K70"),
+            Map.entry("k70", "红米 K70"),
+            Map.entry("华为60", "华为 Mate 60"),
+            Map.entry("mate60", "华为 Mate 60"),
+            Map.entry("xm5", "1000XM5"),
+            Map.entry("狗屁王", "GPW 罗技"),
+            Map.entry("狗屁王2", "GPW 罗技"),
+            Map.entry("赤兔", "李宁 赤兔"),
+            Map.entry("始祖鸟", "始祖鸟 Arc'teryx")
+    );
+
+    /**
+     * 智能切词与别名归一化：
+     * 1. 自动映射常见电商数码别名（如 果15 -> 苹果 15，米14 -> 小米 14）
+     * 2. 在中文字符与字母/数字交界处自动补全切词（如 "苹果15" -> ["苹果", "15"]）
+     */
+    private List<String> extractSearchTokens(String keyword) {
+        if (!StringUtils.hasText(keyword)) {
+            return Collections.emptyList();
+        }
+        String clean = keyword.trim().toLowerCase();
+        for (Map.Entry<String, String> entry : ALIAS_MAP.entrySet()) {
+            if (clean.contains(entry.getKey())) {
+                clean = clean.replace(entry.getKey(), entry.getValue());
+            }
+        }
+        // 在中英文、中文字符与数字交界处增加空格切词，例如 "苹果15" -> "苹果 15", "李宁6" -> "李宁 6"
+        clean = clean.replaceAll("([\\u4e00-\\u9fa5])([a-zA-Z0-9])", "$1 $2")
+                     .replaceAll("([a-zA-Z0-9])([\\u4e00-\\u9fa5])", "$1 $2");
+
+        String[] parts = clean.split("[\\s,，+、]+");
+        List<String> tokens = new ArrayList<>();
+        for (String p : parts) {
+            if (StringUtils.hasText(p) && !p.isBlank()) {
+                tokens.add(p.trim());
+            }
+        }
+        return tokens;
+    }
+
     /**
      * 搜索商品列表（支持关键词模糊搜索与最高价格限制，供 AI 导购与前端商城调用）
      */
@@ -67,24 +111,25 @@ public class ProductService {
 
         if (StringUtils.hasText(keyword)) {
             String trimmed = keyword.trim();
-            String[] tokens = trimmed.split("[\\s,，+、]+");
-            if (tokens.length <= 1) {
-                wrapper.and(w -> w.like(Product::getName, trimmed)
+            List<String> tokens = extractSearchTokens(trimmed);
+
+            wrapper.and(outer -> {
+                // 1. 全词模糊命中（最高优先级）
+                outer.like(Product::getName, trimmed)
                         .or().like(Product::getDescription, trimmed)
-                        .or().like(Product::getCategory, trimmed));
-            } else {
-                wrapper.and(outer -> {
-                    outer.like(Product::getName, trimmed)
-                            .or().like(Product::getDescription, trimmed);
-                    for (String token : tokens) {
-                        if (StringUtils.hasText(token)) {
-                            outer.or(w -> w.like(Product::getName, token)
+                        .or().like(Product::getCategory, trimmed);
+
+                // 2. 多词协同命中：所有切词同时命中商品名或描述（如 "苹果" AND "15"）
+                if (tokens.size() > 1) {
+                    outer.or(andGroup -> {
+                        for (String token : tokens) {
+                            andGroup.and(w -> w.like(Product::getName, token)
                                     .or().like(Product::getDescription, token)
                                     .or().like(Product::getCategory, token));
                         }
-                    }
-                });
-            }
+                    });
+                }
+            });
         }
 
         if (maxPrice > 0) {
