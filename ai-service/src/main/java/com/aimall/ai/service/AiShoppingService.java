@@ -449,6 +449,20 @@ public class AiShoppingService {
                             toolCtx.put("traceId", traceId);
                         }
 
+                        log.info("==================== [AI 大模型对话·输入] ====================");
+                        log.info("[会话ID] {}, [认证用户] {}, [追踪ID] {}", effectiveSessionId, effectiveUserId, traceId);
+                        log.info("[历史记忆轮数] {}", (history != null ? history.size() : 0));
+                        log.info("[用户原输入] {}", userPrompt);
+                        if (hasImage) {
+                            log.info("[多模态视觉特征] 视觉解构输出: {}", visualAttr);
+                        }
+                        if (!ragContext.isEmpty()) {
+                            log.info("[RAG 向量召回背景知识]\n{}", ragContext);
+                        }
+                        log.info("[System Prompt 系统提示词]\n{}", systemPrompt);
+                        log.info("[User Prompt 实际输入]\n{}", actualAgentPrompt);
+                        log.info("=============================================================");
+
                         var requestSpec = chatClient.prompt()
                                 .messages(promptMessages)
                                 .toolContext(toolCtx);
@@ -478,6 +492,13 @@ public class AiShoppingService {
                                     }
                                 })
                                 .blockLast();
+
+                        long chatCost = System.currentTimeMillis() - startTime;
+                        log.info("==================== [AI 大模型对话·输出] ====================");
+                        log.info("[会话ID] {}, [模型流式总耗时] {} ms, [模型响应字数] {}",
+                                effectiveSessionId, chatCost, fullResponse.length());
+                        log.info("[大模型最终回复正文]\n{}", fullResponse);
+                        log.info("=============================================================");
 
                         if (fullResponse.length() > 0) {
                             callSucceeded = true;
@@ -601,6 +622,7 @@ public class AiShoppingService {
      * 3. 具备自动异常降级，确保流程永远平滑前进不卡顿。
      */
     private Map<String, Object> callVisualAgent(String userPrompt, String imageData) {
+        long visualStart = System.currentTimeMillis();
         try {
             String baseUrl = (chatBaseUrl != null && !chatBaseUrl.isBlank()) ? chatBaseUrl.trim() : "https://dashscope.aliyuncs.com/compatible-mode";
             String url = baseUrl.endsWith("/") ? baseUrl + "v1/chat/completions" : baseUrl + "/v1/chat/completions";
@@ -609,6 +631,11 @@ public class AiShoppingService {
             if (!imagePayload.startsWith("http://") && !imagePayload.startsWith("https://") && !imagePayload.startsWith("data:")) {
                 imagePayload = "data:image/jpeg;base64," + imagePayload;
             }
+
+            log.info("==================== [AI Agent 1 视觉解构·输入] ====================");
+            log.info("[用户Prompt] {}", userPrompt);
+            log.info("[图片载荷] {}", imagePayload.startsWith("data:") ? "Base64(length=" + imagePayload.length() + ")" : imagePayload);
+            log.info("==================================================================");
 
             Map<String, Object> requestBody = Map.of(
                     "model", (chatModel != null && !chatModel.isBlank()) ? chatModel : "qwen3.7-flash",
@@ -639,7 +666,11 @@ public class AiShoppingService {
                     .retrieve()
                     .body(String.class);
 
-            log.info("[AI Agent 1 视觉解构响应] {}", rawResponse);
+            long visualCost = System.currentTimeMillis() - visualStart;
+            log.info("==================== [AI Agent 1 视觉解构·输出] ====================");
+            log.info("[视觉感知耗时] {} ms", visualCost);
+            log.info("[视觉解构原始响应]\n{}", rawResponse);
+            log.info("==================================================================");
             return extractContentFromOpenAiResponse(rawResponse);
         } catch (Exception e) {
             log.warn("[AI Agent 1 视觉解构调用异常] 自动降级: {}", e.getMessage(), e);
@@ -658,6 +689,13 @@ public class AiShoppingService {
      * 多模型 Failover 容灾兜底：通过 RestClient 直连 DeepSeek OpenAI 兼容接口
      */
     private String callDeepSeekFailover(String systemPrompt, List<Message> history, String userPrompt) {
+        long dsStart = System.currentTimeMillis();
+        String effectiveModel = (deepSeekModel != null && !deepSeekModel.isBlank()) ? deepSeekModel : "deepseek-chat";
+        log.info("==================== [AI DeepSeek 兜底·输入] ====================");
+        log.info("[兜底模型] {}", effectiveModel);
+        log.info("[System Prompt 兜底系统提示词]\n{}", systemPrompt);
+        log.info("[User Prompt 实际输入]\n{}", userPrompt);
+        log.info("===============================================================");
         try {
             String baseUrl = (deepSeekBaseUrl != null && !deepSeekBaseUrl.isBlank()) 
                     ? deepSeekBaseUrl.trim() : "https://api.deepseek.com";
@@ -677,7 +715,7 @@ public class AiShoppingService {
             messages.add(Map.of("role", "user", "content", userPrompt));
 
             Map<String, Object> requestBody = Map.of(
-                    "model", (deepSeekModel != null && !deepSeekModel.isBlank()) ? deepSeekModel : "deepseek-chat",
+                    "model", effectiveModel,
                     "messages", messages,
                     "temperature", 0.7,
                     "stream", false
@@ -699,16 +737,25 @@ public class AiShoppingService {
                     .retrieve()
                     .body(String.class);
 
-            log.info("[AI DeepSeek 兜底成功响应] length={}", rawResponse != null ? rawResponse.length() : 0);
+            long dsCost = System.currentTimeMillis() - dsStart;
             if (rawResponse != null) {
                 JsonNode root = objectMapper.readTree(rawResponse);
                 JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
                 if (contentNode.isTextual()) {
-                    return contentNode.asText();
+                    String answer = contentNode.asText();
+                    log.info("==================== [AI DeepSeek 兜底·输出] ====================");
+                    log.info("[兜底耗时] {} ms, [响应字数] {}", dsCost, answer.length());
+                    log.info("[兜底模型回复正文]\n{}", answer);
+                    log.info("===============================================================");
+                    return answer;
                 }
             }
+            log.warn("[AI DeepSeek 兜底响应解析异常] rawResponse: {}", rawResponse);
         } catch (Exception e) {
-            log.error("[AI DeepSeek 调用失败] {}", e.getMessage(), e);
+            long dsCost = System.currentTimeMillis() - dsStart;
+            log.error("==================== [AI DeepSeek 兜底·异常] ====================");
+            log.error("[兜底耗时] {} ms, [错误信息] {}", dsCost, e.getMessage(), e);
+            log.error("===============================================================");
         }
         return null;
     }

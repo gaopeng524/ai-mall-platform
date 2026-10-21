@@ -114,12 +114,20 @@ public class AiToolExecutionContext {
     }
 
     /**
-     * 工具执行作用域隔离包装器：
-     * 1. 显式从 Spring AI ToolContext 提取 sessionId，严格从 SESSION_REGISTRY 命中对应会话；
-     * 2. 在执行线程中安全绑定 SessionContext、UserContext 与 TraceContext；
-     * 3. 在 finally 块中强制恢复或清除线程上下文，彻底消灭 Reactor Netty / 线程池复用导致的身份串流与内存泄漏！
+     * 工具执行作用域隔离包装器（重载：兼容无工具名传入）：
      */
     public static <T> T executeInToolContext(org.springframework.ai.chat.model.ToolContext toolContext, ToolAction<T> action) {
+        return executeInToolContext("unknown_tool", toolContext, null, action);
+    }
+
+    /**
+     * 工具执行作用域隔离包装器（完整版：支持工具名称、入参、出参全量审计日志）：
+     * 1. 显式从 Spring AI ToolContext 提取 sessionId，严格从 SESSION_REGISTRY 命中对应会话；
+     * 2. 在执行线程中安全绑定 SessionContext、UserContext 与 TraceContext；
+     * 3. 结构化打印工具调用【入参】、【出参】、【耗时】与【执行状态】；
+     * 4. 在 finally 块中强制恢复或清除线程上下文，彻底消灭 Reactor Netty / 线程池复用导致的身份串流与内存泄漏！
+     */
+    public static <T> T executeInToolContext(String toolName, org.springframework.ai.chat.model.ToolContext toolContext, Object toolRequest, ToolAction<T> action) {
         String sessionId = null;
         Long explicitUserId = null;
         String explicitTraceId = null;
@@ -161,12 +169,24 @@ public class AiToolExecutionContext {
         UserContext.UserInfo prevUser = UserContext.get();
         String prevTrace = TraceContext.getTraceId();
 
-        try {
-            Long effectiveUserId = explicitUserId;
-            if (effectiveUserId == null && targetCtx != null) {
-                effectiveUserId = targetCtx.getUserId();
-            }
+        Long effectiveUserId = explicitUserId;
+        if (effectiveUserId == null && targetCtx != null) {
+            effectiveUserId = targetCtx.getUserId();
+        }
 
+        String effectiveTrace = explicitTraceId;
+        if (effectiveTrace == null && targetCtx != null) {
+            effectiveTrace = targetCtx.getTraceId();
+        }
+
+        log.info(">>>>>>>>>>>>>>>>>>>> [AI 工具调用·执行开始] >>>>>>>>>>>>>>>>>>>>");
+        log.info("[工具名称] {}", toolName);
+        log.info("[输入参数] {}", toolRequest != null ? toolRequest : "{}");
+        log.info("[调用会话] sessionId={}, userId={}, traceId={}", sessionId, effectiveUserId, effectiveTrace);
+        log.info("-------------------------------------------------------------");
+
+        long start = System.currentTimeMillis();
+        try {
             if (targetCtx != null) {
                 THREAD_CONTEXT.set(targetCtx);
             }
@@ -177,15 +197,22 @@ public class AiToolExecutionContext {
                 UserContext.clear();
             }
 
-            String effectiveTrace = explicitTraceId;
-            if (effectiveTrace == null && targetCtx != null) {
-                effectiveTrace = targetCtx.getTraceId();
-            }
             if (effectiveTrace != null) {
                 TraceContext.setTraceId(effectiveTrace);
             }
-            return action.execute();
+
+            T result = action.execute();
+            long cost = System.currentTimeMillis() - start;
+            log.info("<<<<<<<<<<<<<<<<<<<< [AI 工具调用·执行完成] <<<<<<<<<<<<<<<<<<<<");
+            log.info("[工具名称] {}, [耗时] {} ms", toolName, cost);
+            log.info("[输出结果]\n{}", result);
+            log.info("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
+            return result;
         } catch (Exception e) {
+            long cost = System.currentTimeMillis() - start;
+            log.error("<<<<<<<<<<<<<<<<<<<< [AI 工具调用·执行失败] <<<<<<<<<<<<<<<<<<<<");
+            log.error("[工具名称] {}, [耗时] {} ms, [错误信息] {}", toolName, cost, e.getMessage(), e);
+            log.error("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
             if (e instanceof RuntimeException re) {
                 throw re;
             }

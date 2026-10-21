@@ -73,7 +73,7 @@ public class MallTools {
     @Bean
     @Description("根据关键词和预算上限搜索商品列表，返回商品ID、名称、分类、价格、库存与核心卖点。当用户询问或挑选商品时调用。")
     public BiFunction<SearchRequest, ToolContext, String> searchProducts() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("searchProducts", toolContext, request, () -> {
             String kw = request.keyword() != null ? request.keyword() : "";
             double price = request.maxPrice() != null ? request.maxPrice() : 0.0;
             String detailDesc = String.format("关键词: %s%s",
@@ -110,7 +110,7 @@ public class MallTools {
     @Bean
     @Description("根据商品ID查询单个商品的详细信息，包括规格、参数、实时库存、详细描述。当用户需要了解特定商品详情或对比商品时调用。")
     public BiFunction<DetailRequest, ToolContext, String> getProductDetail() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getProductDetail", toolContext, request, () -> {
             String detailDesc = "商品ID: " + request.productId();
             AiToolExecutionContext.emitToolStep("product_query", "正在查询商品详情与实时库存", detailDesc, "running");
             log.info("[AI Tool] getProductDetail: productId={}", request.productId());
@@ -137,7 +137,7 @@ public class MallTools {
     @Bean
     @Description("为当前登录用户直接创建订单。当用户明确表示要立即购买/下单某商品时调用。需要提供商品ID和购买数量。")
     public BiFunction<CreateOrderRequest, ToolContext, String> createOrder() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("createOrder", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "创建订单需先登录商城账号", "failed");
@@ -170,7 +170,7 @@ public class MallTools {
     @Bean
     @Description("查询当前登录用户的历史订单列表，包括订单号、商品名称、数量、总金额、订单状态(PENDING/PAID/SHIPPED/DONE/CANCELLED)。")
     public BiFunction<UserOrdersRequest, ToolContext, String> getUserOrders() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getUserOrders", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("order_query", "操作拦截：用户未登录", "查看历史订单需先登录", "failed");
@@ -212,7 +212,7 @@ public class MallTools {
     @Bean
     @Description("根据订单号查询单笔订单的详细信息与最新支付状态。当用户询问某笔具体订单号的状态时调用。")
     public BiFunction<OrderDetailRequest, ToolContext, String> getOrderDetail() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getOrderDetail", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "查询订单详情需先登录", "failed");
@@ -249,7 +249,7 @@ public class MallTools {
     @Bean
     @Description("取消指定的未支付(PENDING)订单并自动归还商品库存。当用户明确要求取消某笔订单时调用。")
     public BiFunction<CancelOrderRequest, ToolContext, String> cancelOrder() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("cancelOrder", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "取消订单需先登录商城账号", "failed");
@@ -288,7 +288,7 @@ public class MallTools {
     @Bean
     @Description("将指定商品添加到当前用户的购物车。当用户表达想要把某商品加入购物车、先放购物车时调用。")
     public BiFunction<AddToCartRequest, ToolContext, String> addToCart() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("addToCart", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "加购需先登录商城账号", "failed");
@@ -324,7 +324,7 @@ public class MallTools {
     @Bean
     @Description("查询当前用户购物车中的所有商品列表、数量、单价与合计金额。当用户询问购物车内容或想看购物车时调用。")
     public BiFunction<GetCartRequest, ToolContext, String> getCartList() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getCartList", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("cart_query", "操作拦截：用户未登录", "查看购物车需先登录商城账号", "failed");
@@ -371,7 +371,7 @@ public class MallTools {
     @Bean
     @Description("将用户购物车中已勾选的商品一键合并结算下单，生成订单并进入收银台。当用户明确表示要结算购物车或购买购物车内商品时调用。")
     public BiFunction<CheckoutCartRequest, ToolContext, String> checkoutCart() {
-        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext(toolContext, () -> {
+        return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("checkoutCart", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
             if (uid == null || uid <= 0) {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "结算购物车需先登录商城账号", "failed");
