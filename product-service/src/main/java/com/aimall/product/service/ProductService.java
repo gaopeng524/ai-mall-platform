@@ -70,7 +70,13 @@ public class ProductService {
             Map.entry("狗屁王", "GPW 罗技"),
             Map.entry("狗屁王2", "GPW 罗技"),
             Map.entry("赤兔", "李宁 赤兔"),
+            Map.entry("跑鞋", "跑步鞋"),
             Map.entry("始祖鸟", "始祖鸟 Arc'teryx")
+    );
+
+    /** 意图干扰词与停用词过滤集合（避免“查库存/多少钱/有货吗”等用户口语污染微服务切词导致匹配落空） */
+    private static final java.util.Set<String> STOP_WORDS = java.util.Set.of(
+            "库存", "还有多少", "多少", "还有", "有货吗", "有货", "有吗", "多少钱", "价格", "怎么样", "推荐", "正品", "买", "想买", "一双", "一台", "一个", "一部"
     );
 
     /**
@@ -99,7 +105,10 @@ public class ProductService {
         List<String> tokens = new ArrayList<>();
         for (String p : parts) {
             if (StringUtils.hasText(p) && !p.isBlank()) {
-                tokens.add(p.trim());
+                String token = p.trim();
+                if (!STOP_WORDS.contains(token)) {
+                    tokens.add(token);
+                }
             }
         }
         return tokens;
@@ -122,8 +131,8 @@ public class ProductService {
                         .or().like(Product::getDescription, trimmed)
                         .or().like(Product::getCategory, trimmed);
 
-                // 2. 多词协同命中：所有切词同时命中商品名或描述（如 "苹果" AND "15"）
-                if (tokens.size() > 1) {
+                // 2. 多词协同命中：所有有效切词同时命中商品名或描述（如 "李宁" AND "赤兔" AND "6"）
+                if (!tokens.isEmpty()) {
                     outer.or(andGroup -> {
                         for (String token : tokens) {
                             andGroup.and(w -> w.like(Product::getName, token)
