@@ -1,7 +1,7 @@
 package com.aimall.ai;
 
-import com.aimall.ai.service.AiShoppingService;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -9,18 +9,26 @@ import org.springframework.boot.test.context.SpringBootTest;
 public class AiChatTest {
 
     @Autowired
-    private AiShoppingService aiShoppingService;
+    private ChatClient chatClient;
 
     @Test
-    public void testChat() {
-        System.out.println("Starting testChat...");
+    public void testStreamWithFunctions() {
+        System.out.println("Starting testStreamWithFunctions...");
         try {
-            var flux = aiShoppingService.chat("test_session_id", 1L, "有果15吗", null);
-            flux.doOnNext(event -> System.out.println("[Flux Event] " + event))
-                .doOnError(err -> System.err.println("[Flux Error] " + err.getMessage()))
-                .blockLast();
+            var flux = chatClient.prompt()
+                    .user("有果15吗")
+                    .functions("searchProducts")
+                    .stream()
+                    .content();
+
+            StringBuilder sb = new StringBuilder();
+            flux.doOnNext(chunk -> {
+                System.out.print(chunk);
+                sb.append(chunk);
+            }).blockLast();
+            System.out.println("\n--- STREAM FINISHED! Total chars: " + sb.length() + " ---");
         } catch (Exception e) {
-            System.err.println("[Test Exception] " + e.getMessage());
+            System.err.println("\n[CAUGHT EXCEPTION]: " + e.getClass().getName() + " - " + e.getMessage());
             e.printStackTrace();
         }
     }

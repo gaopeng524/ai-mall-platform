@@ -36,35 +36,52 @@ public class MallTools {
     private final OrderFeignClient orderFeignClient;
 
     public record SearchRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("搜索关键词，如商品名称、类别、品牌等，查全部可传空字符串") String keyword,
+            @JsonPropertyDescription("搜索关键词，如商品名称、类别、品牌等，查全部可传空字符串") String keyword,
             @JsonPropertyDescription("最高价格限制，单位元，不限制时传0") Double maxPrice
-    ) {}
+    ) {
+        public SearchRequest {
+            if (keyword == null) keyword = "";
+            if (maxPrice == null) maxPrice = 0.0;
+        }
+    }
 
     public record DetailRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("商品ID，整数类型") Long productId
+            @JsonPropertyDescription("商品ID，整数类型") Long productId
     ) {}
 
     public record CreateOrderRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("商品ID") Long productId,
-            @JsonProperty(required = true) @JsonPropertyDescription("购买数量，默认1") Integer quantity
-    ) {}
+            @JsonPropertyDescription("商品ID") Long productId,
+            @JsonPropertyDescription("购买数量，默认1") Integer quantity
+    ) {
+        public CreateOrderRequest {
+            if (quantity == null || quantity <= 0) quantity = 1;
+        }
+    }
 
     public record UserOrdersRequest(
             @JsonPropertyDescription("可选过滤状态：ALL/PENDING/PAID/SHIPPED/DONE/CANCELLED，默认ALL") String statusFilter
-    ) {}
+    ) {
+        public UserOrdersRequest {
+            if (statusFilter == null) statusFilter = "ALL";
+        }
+    }
 
     public record OrderDetailRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("订单号，如 ORD2026...") String orderNo
+            @JsonPropertyDescription("订单号，如 ORD2026...") String orderNo
     ) {}
 
     public record CancelOrderRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("待取消的订单号，如 ORD2026...") String orderNo
+            @JsonPropertyDescription("待取消的订单号，如 ORD2026...") String orderNo
     ) {}
 
     public record AddToCartRequest(
-            @JsonProperty(required = true) @JsonPropertyDescription("商品ID") Long productId,
-            @JsonProperty(required = true) @JsonPropertyDescription("加购数量，默认1") Integer quantity
-    ) {}
+            @JsonPropertyDescription("商品ID") Long productId,
+            @JsonPropertyDescription("加购数量，默认1") Integer quantity
+    ) {
+        public AddToCartRequest {
+            if (quantity == null || quantity <= 0) quantity = 1;
+        }
+    }
 
     public record GetCartRequest() {}
 

@@ -522,7 +522,7 @@ public class AiShoppingService {
                             callSucceeded = true;
                         }
                     } catch (Exception primaryEx) {
-                        log.warn("[AI Agent 2 主模型调用异常] 通义千问流式异常: {}, 触发容灾链路", primaryEx.getMessage());
+                        log.warn("[AI Agent 2 主模型调用异常] 通义千问流式异常: {}, 触发容灾链路", primaryEx.getMessage(), primaryEx);
                     }
 
                     // 7. 【多模型容灾 Failover P1-5】：仅当主模型尚未产出任何 chunk 时切换 DeepSeek，杜绝“半截+全文”重复
@@ -778,9 +778,15 @@ public class AiShoppingService {
             log.warn("[AI DeepSeek 兜底响应解析异常] rawResponse: {}", rawResponse);
         } catch (Exception e) {
             long dsCost = System.currentTimeMillis() - dsStart;
-            log.error("==================== [AI DeepSeek 兜底·异常] ====================");
-            log.error("[兜底耗时] {} ms, [错误信息] {}", dsCost, e.getMessage(), e);
-            log.error("===============================================================");
+            if (e.getMessage() != null && e.getMessage().contains("402")) {
+                log.warn("==================== [AI DeepSeek 兜底·提示] ====================");
+                log.warn("[兜底耗时] {} ms, DeepSeek 账户余额不足(402 Insufficient Balance)，已跳过次级兜底，无缝流转至第三级规则推荐", dsCost);
+                log.warn("===============================================================");
+            } else {
+                log.error("==================== [AI DeepSeek 兜底·异常] ====================");
+                log.error("[兜底耗时] {} ms, [错误信息] {}", dsCost, e.getMessage(), e);
+                log.error("===============================================================");
+            }
         }
         return null;
     }

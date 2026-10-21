@@ -39,12 +39,56 @@ public class AiConfig {
         return ChatClient.builder(chatModel).build();
     }
 
+    /**
+     * 自定义 FunctionCallbackResolver 包装器：
+     * 针对 DashScope/通义千问在流式 Tool Calling 时可能发送空 arguments("") 或无入参调用，
+     * 自动补齐为 "{}" 空 JSON 对象，彻底消灭 Jackson MismatchedInputException (No content to map due to end-of-input) 异常！
+     */
+    @Bean
+    public org.springframework.ai.model.function.FunctionCallbackResolver functionCallbackResolver(org.springframework.context.ApplicationContext applicationContext) {
+        org.springframework.ai.model.function.DefaultFunctionCallbackResolver delegate = new org.springframework.ai.model.function.DefaultFunctionCallbackResolver();
+        delegate.setApplicationContext(applicationContext);
+        return name -> {
+            var callback = delegate.resolve(name);
+            if (callback == null) {
+                return null;
+            }
+            return new org.springframework.ai.model.function.FunctionCallback() {
+                @Override
+                public String getName() {
+                    return callback.getName();
+                }
+
+                @Override
+                public String getDescription() {
+                    return callback.getDescription();
+                }
+
+                @Override
+                public String getInputTypeSchema() {
+                    return callback.getInputTypeSchema();
+                }
+
+                @Override
+                public String call(String functionInput) {
+                    return call(functionInput, null);
+                }
+
+                @Override
+                public String call(String functionInput, org.springframework.ai.chat.model.ToolContext toolContext) {
+                    String safeInput = (functionInput == null || functionInput.isBlank()) ? "{}" : functionInput.trim();
+                    return callback.call(safeInput, toolContext);
+                }
+            };
+        };
+    }
+
     @Bean
     public RestClientCustomizer restClientCustomizer(ObjectMapper objectMapper) {
         return builder -> {
             SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-            requestFactory.setConnectTimeout(5000);
-            requestFactory.setReadTimeout(30000);
+            requestFactory.setConnectTimeout(15000);
+            requestFactory.setReadTimeout(45000);
             builder.requestFactory(requestFactory);
             builder.requestInterceptor((request, body, execution) -> {
                 String uri = request.getURI().toString();
@@ -68,8 +112,8 @@ public class AiConfig {
     public WebClientCustomizer webClientCustomizer(ObjectMapper objectMapper) {
         return builder -> {
             HttpClient httpClient = HttpClient.create()
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-                    .responseTimeout(Duration.ofSeconds(45));
+                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 15000)
+                    .responseTimeout(Duration.ofSeconds(60));
             builder.clientConnector(new ReactorClientHttpConnector(httpClient));
             builder.filter((request, next) -> {
                 if (request.url().toString().contains("/chat/completions")) {

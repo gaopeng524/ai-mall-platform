@@ -44,6 +44,10 @@ public class AiToolExecutionContext {
     /** 会话全局注册表（针对显式 sessionId 检索提供映射） */
     private static final Map<String, SessionContext> SESSION_REGISTRY = new ConcurrentHashMap<>();
 
+    private static final java.util.concurrent.ExecutorService TOOL_EXECUTOR = java.util.concurrent.Executors.newCachedThreadPool(
+            new org.springframework.scheduling.concurrent.CustomizableThreadFactory("ai-tool-worker-")
+    );
+
     private static String getRegistryKey(String sessionId, Long userId) {
         String uidStr = (userId != null && userId > 0) ? String.valueOf(userId) : "guest";
         return uidStr + ":" + (sessionId != null ? sessionId : "default");
@@ -187,21 +191,33 @@ public class AiToolExecutionContext {
 
         long start = System.currentTimeMillis();
         try {
-            if (targetCtx != null) {
-                THREAD_CONTEXT.set(targetCtx);
-            }
+            // 核心解决：Spring AI 在 Netty reactor-http-nio 线程中执行工具时，Spring Cloud LoadBalancer
+            // 会调用 Mono.block() 选择微服务实例，触发 "block() is not supported in thread reactor-http-nio" 异常。
+            // 将工具调用调度到专属工作线程池中执行，彻底解耦 Netty 事件循环，杜绝阻塞检查拦截！
+            final SessionContext finalTargetCtx = targetCtx;
+            final Long finalEffectiveUserId = effectiveUserId;
+            final String finalEffectiveTrace = effectiveTrace;
 
-            if (effectiveUserId != null && effectiveUserId > 0) {
-                UserContext.set(new UserContext.UserInfo(effectiveUserId, null, null));
-            } else {
-                UserContext.clear();
-            }
-
-            if (effectiveTrace != null) {
-                TraceContext.setTraceId(effectiveTrace);
-            }
-
-            T result = action.execute();
+            T result = TOOL_EXECUTOR.submit(() -> {
+                if (finalTargetCtx != null) {
+                    THREAD_CONTEXT.set(finalTargetCtx);
+                }
+                if (finalEffectiveUserId != null && finalEffectiveUserId > 0) {
+                    UserContext.set(new UserContext.UserInfo(finalEffectiveUserId, null, null));
+                } else {
+                    UserContext.clear();
+                }
+                if (finalEffectiveTrace != null) {
+                    TraceContext.setTraceId(finalEffectiveTrace);
+                }
+                try {
+                    return action.execute();
+                } finally {
+                    THREAD_CONTEXT.remove();
+                    UserContext.clear();
+                    TraceContext.clear();
+                }
+            }).get();
             long cost = System.currentTimeMillis() - start;
             log.info("<<<<<<<<<<<<<<<<<<<< [AI 工具调用·执行完成] <<<<<<<<<<<<<<<<<<<<");
             log.info("[工具名称] {}, [耗时] {} ms", toolName, cost);
