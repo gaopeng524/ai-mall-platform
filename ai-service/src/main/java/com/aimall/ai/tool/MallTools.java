@@ -101,6 +101,15 @@ public class MallTools {
             log.info("[AI Tool] searchProducts: keyword={}, maxPrice={}", kw, price);
             try {
                 var result = productFeignClient.search(kw, price);
+                // 核心智能容错降级：若初次长关键词未命中，自动剥离口语或泛品类后缀泛化重试（如“李宁赤兔6跑鞋” -> “李宁赤兔”）
+                if ((result == null || result.getData() == null || result.getData().isEmpty()) && !kw.isBlank()) {
+                    String relaxed = relaxKeyword(kw);
+                    if (!relaxed.equalsIgnoreCase(kw.trim())) {
+                        log.info("[AI Tool] searchProducts 初始关键词 '{}' 未查到商品，触发降级泛化重试: '{}'", kw, relaxed);
+                        result = productFeignClient.search(relaxed, price);
+                    }
+                }
+
                 if (result == null || result.getData() == null || result.getData().isEmpty()) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品检索完成（未找到匹配项）", detailDesc, "success");
                     return "暂未找到符合条件的商品。请确认商品名称或换用更简短的关键词（如“李宁”或“跑鞋”）再次搜索。";
@@ -432,5 +441,37 @@ public class MallTools {
                 p.get("price"),
                 p.get("stock"),
                 desc);
+    }
+
+    /**
+     * 智能降级泛化关键词：剥离口语意图（“库存/还有多少”）、常见品类泛词（“跑鞋/跑步鞋/手机/耳机/板鞋”）或数字后缀，
+     * 用于当下游微服务切词落空时自动进行二次容错召回
+     */
+    private String relaxKeyword(String kw) {
+        if (kw == null || kw.isBlank()) {
+            return "";
+        }
+        String relaxed = kw.trim();
+        // 1. 剥离口语意图词
+        relaxed = relaxed.replaceAll("(库存|还有多少|多少钱|价格|有货吗|有货|有吗|推荐|正品|买)", "").trim();
+        // 2. 电商特色品牌/品类关键对齐
+        if (relaxed.contains("赤兔")) {
+            return "李宁赤兔";
+        }
+        if (relaxed.contains("苹果") || relaxed.contains("iphone")) {
+            return "苹果";
+        }
+        if (relaxed.contains("小米")) {
+            return "小米";
+        }
+        if (relaxed.contains("漫步者")) {
+            return "漫步者";
+        }
+        if (relaxed.contains("华为") || relaxed.contains("mate")) {
+            return "华为";
+        }
+        // 3. 通用剥离泛品类后缀
+        relaxed = relaxed.replaceAll("(跑步鞋|跑鞋|板鞋|运动鞋|手机|耳机|羽绒服|鼠标|键盘|咖啡机|双肩包)$", "").trim();
+        return relaxed.isBlank() ? kw : relaxed;
     }
 }

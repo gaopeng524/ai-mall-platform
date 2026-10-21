@@ -816,7 +816,7 @@ public class AiShoppingService {
     }
 
     /**
-     * 判断是否为交易类或个性化私有操作（交易操作严禁读取或写入语义缓存）
+     * 判断是否为交易类、个性化私有操作或强时效动态数据（严禁读取或写入静态语义缓存）
      */
     private boolean isTransactionalQuery(String query) {
         if (query == null || query.isBlank()) {
@@ -825,7 +825,10 @@ public class AiShoppingService {
         String q = query.toLowerCase();
         return q.contains("买") || q.contains("下单") || q.contains("车") || q.contains("购物车")
                 || q.contains("订单") || q.contains("支付") || q.contains("结算") || q.contains("取消")
-                || q.contains("退款") || q.contains("我的");
+                || q.contains("退款") || q.contains("我的")
+                // 实时动效与库存属性严禁写入/读取语义缓存，必须穿透微服务获取实时数据
+                || q.contains("库存") || q.contains("还剩") || q.contains("多少件") || q.contains("多少双")
+                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货");
     }
 
     /**
