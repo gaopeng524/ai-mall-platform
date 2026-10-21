@@ -143,7 +143,25 @@ public class AiConfig {
                                 return request.body().insert(decorator, context);
                             })
                             .build();
-                    return next.exchange(modifiedRequest);
+                    return next.exchange(modifiedRequest).map(response -> {
+                        return response.mutate().body(flux -> flux.map(dataBuffer -> {
+                            byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                            dataBuffer.read(bytes);
+                            DataBufferUtils.release(dataBuffer);
+                            String s = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                            // 核心修复：针对通义千问 (DashScope) 在流式 Tool Calling 续传 chunk 中发送 "id":"" (空字符串 id)，
+                            // Spring AI 的 OpenAiStreamFunctionCallingHelper 判定 id != null 即误以为新工具调用开始，
+                            // 从而将工具拆分成两个独立调用，第二个调用的 toolCall.name() 为 null，
+                            // 最终在 AbstractToolCallSupport.executeFunctions 执行 functionCallbackRegister.containsKey(null) 时触发 ConcurrentHashMap NPE！
+                            // 将流式数据中的 "id":"" / "id": "" 规范化为 "id":null，使 Spring AI 识别为参数续传并完美合并进首包工具！
+                            if (s.contains("\"id\":\"\"") || s.contains("\"id\": \"\"")) {
+                                s = s.replace("\"id\":\"\"", "\"id\":null").replace("\"id\": \"\"", "\"id\":null");
+                                byte[] mod = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                                return org.springframework.core.io.buffer.DefaultDataBufferFactory.sharedInstance.wrap(mod);
+                            }
+                            return org.springframework.core.io.buffer.DefaultDataBufferFactory.sharedInstance.wrap(bytes);
+                        })).build();
+                    });
                 }
                 return next.exchange(request);
             });
