@@ -88,7 +88,7 @@ public class MallTools {
     public record CheckoutCartRequest() {}
 
     @Bean
-    @Description("根据关键词和预算上限搜索商品列表，返回商品ID、名称、分类、价格、库存与核心卖点。当用户询问或挑选商品时调用。")
+    @Description("【首选核心查询工具】根据关键词、商品名称、品牌（如“李宁赤兔”、“iPhone 15”、“跑鞋”等）和预算搜索商品列表，返回商品ID、名称、分类、价格、实时库存与核心卖点。凡是用户按名称找商品、询问商品库存、查询价格、或者未获知确切数字ID时，必须百分之百调用此工具！")
     public BiFunction<SearchRequest, ToolContext, String> searchProducts() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("searchProducts", toolContext, request, () -> {
             String kw = request.keyword() != null ? request.keyword() : "";
@@ -97,13 +97,13 @@ public class MallTools {
                     kw.isBlank() ? "全部商品" : kw,
                     price > 0 ? ", 预算上限: ¥" + (int) price : "");
 
-            AiToolExecutionContext.emitToolStep("product_query", "正在调用商品服务检索商品", detailDesc, "running");
+            AiToolExecutionContext.emitToolStep("product_query", "正在调用商品服务检索商品与实时库存", detailDesc, "running");
             log.info("[AI Tool] searchProducts: keyword={}, maxPrice={}", kw, price);
             try {
                 var result = productFeignClient.search(kw, price);
                 if (result == null || result.getData() == null || result.getData().isEmpty()) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品检索完成（未找到匹配项）", detailDesc, "success");
-                    return "暂未找到符合条件的商品";
+                    return "暂未找到符合条件的商品。请确认商品名称或换用更简短的关键词（如“李宁”或“跑鞋”）再次搜索。";
                 }
                 List<Map<String, Object>> products = result.getData();
                 List<Map<String, Object>> topProducts = products.stream().limit(6).toList();
@@ -125,7 +125,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("根据商品ID查询单个商品的详细信息，包括规格、参数、实时库存、详细描述。仅在已知确切商品ID（如通过 searchProducts 检索结果获得）时调用，严禁盲目猜测或连续递增商品ID。")
+    @Description("根据已知确切的数字商品ID查询单个商品的详细参数与实时库存。严格约束：仅当已知确切数字商品ID（如由 searchProducts 检索返回的结果中的ID）时才能调用！绝对严禁凭空猜测、捏造或连续递增测试商品ID！不知道商品ID时必须使用 searchProducts。")
     public BiFunction<DetailRequest, ToolContext, String> getProductDetail() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getProductDetail", toolContext, request, () -> {
             String detailDesc = "商品ID: " + request.productId();
@@ -135,9 +135,9 @@ public class MallTools {
                 var result = productFeignClient.getById(request.productId());
                 if (result == null || result.getData() == null) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品详情未找到", detailDesc, "failed");
-                    return String.format("【未找到商品】商品ID %d 在商城中不存在。商城目前在售商品ID范围仅为 1~24。"
-                            + "绝对严禁继续盲目猜测或递增ID（如连续查询ID+1）！"
-                            + "若需要浏览或挑选商品，请立即调用 searchProducts（keyword传空字符串检索全部），或直接告知用户未找到该商品。", request.productId());
+                    return String.format("【调用错误拦截】商品ID %d 在商城中不存在！"
+                            + "你当前未获取该商品的真实数字ID，绝对严禁猜测或递增ID（如连续试探 54, 55, 56...）！"
+                            + "请立即改用 searchProducts(keyword=\"商品名称\") 搜索该商品，searchProducts 会直接返回真实商品ID与实时库存！", request.productId());
                 }
                 Map<String, Object> product = result.getData();
                 AiToolExecutionContext.emitToolStep("product_query",

@@ -88,6 +88,9 @@ public class ProductService {
                 clean = clean.replace(entry.getKey(), entry.getValue());
             }
         }
+        // 清理由于别名替换可能产生的连续重复品牌词（例如“李宁李宁”、“苹果苹果”、“小米小米”）
+        clean = clean.replaceAll("(李宁|苹果|小米|华为|罗技|回力)\\s*\\1+", "$1 ");
+        
         // 在中英文、中文字符与数字交界处增加空格切词，例如 "苹果15" -> "苹果 15", "李宁6" -> "李宁 6"
         clean = clean.replaceAll("([\\u4e00-\\u9fa5])([a-zA-Z0-9])", "$1 $2")
                      .replaceAll("([a-zA-Z0-9])([\\u4e00-\\u9fa5])", "$1 $2");

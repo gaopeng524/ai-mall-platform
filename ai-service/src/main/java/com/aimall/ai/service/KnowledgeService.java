@@ -145,7 +145,7 @@ public class KnowledgeService implements ApplicationRunner {
                 """
                 【专业跑鞋选购与平替知识】
                 - 旗舰标杆：Nike Air Zoom Pegasus 40（售价 ¥799），核心科技为 React 泡棉中底 + 前后掌双 Zoom Air 气垫，适合日常慢跑训练，支撑稳定，重量约 285g。
-                - 顶级高性价比平替：李宁赤兔6 Pro 专业竞速跑步鞋（售价 ¥499，限时秒杀 ¥99）。
+                - 顶级高性价比平替：[商品ID: 3] 李宁赤兔6 Pro 专业竞速跑步鞋（售价 ¥499，限时秒杀 ¥99）。
                 - 核心平替对比与优势：李宁赤兔6 Pro 采用全掌李宁䨻（BOOM）科技轻弹中底，能量回馈高达 80%，重量仅约 210g（比 Nike 轻 75g！），前掌滚动感与跑道提速极佳。千元内专业竞速与日常拉练首选平替。
                 - 百元休闲板鞋对标：Nike Air Force 1 空军一号（¥749）与回力复古经典低帮小白鞋（¥79），回力橡胶硫化底耐磨防滑，适合学生与日常百元内板鞋极致平替。
                 """,
@@ -246,11 +246,12 @@ public class KnowledgeService implements ApplicationRunner {
 
                 String content = String.format("""
                         【商城在售商品知识】
+                        - 商品ID：%s
                         - 商品名称：%s
                         - 所属品类：%s
                         - 官方售价：¥%s
                         - 核心卖点与规格描述：%s
-                        """, name, category, price, desc);
+                        """, id, name, category, price, desc);
 
                 Map<String, Object> metadata = new HashMap<>();
                 metadata.put("productId", id);
