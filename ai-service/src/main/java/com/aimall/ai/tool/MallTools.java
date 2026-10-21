@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Description;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -74,9 +75,15 @@ public class MallTools {
             @JsonPropertyDescription("待取消的订单号，如 ORD2026...") String orderNo
     ) {}
 
-    public record AddToCartRequest(
-            @JsonPropertyDescription("商品ID") Long productId,
+    public record CartItemSpec(
+            @JsonPropertyDescription("商品ID，整数类型") Long productId,
             @JsonPropertyDescription("加购数量，默认1") Integer quantity
+    ) {}
+
+    public record AddToCartRequest(
+            @JsonPropertyDescription("单个商品ID（单款加购时使用）") Long productId,
+            @JsonPropertyDescription("加购数量，默认1") Integer quantity,
+            @JsonPropertyDescription("多款商品批量加购列表。当用户要求加购多款不同商品时传入此列表，支持一次性批量加购！") List<CartItemSpec> items
     ) {
         public AddToCartRequest {
             if (quantity == null || quantity <= 0) quantity = 1;
@@ -314,7 +321,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("将指定商品添加到当前用户的购物车。当用户表达想要把某商品加入购物车、先放购物车时调用。")
+    @Description("【加入购物车（支持单件或批量多件加购）】当用户表达将某商品或多款商品加入购物车时调用。支持单款商品加购或多款商品 items 批量加购。加购完成后自动附带返回最新的购物车商品总件数与总金额，一步到位，严禁先调或重复调用 getCartList！")
     public BiFunction<AddToCartRequest, ToolContext, String> addToCart() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("addToCart", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
@@ -322,35 +329,65 @@ public class MallTools {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "加购需先登录商城账号", "failed");
                 return "【安全拦截】您当前尚未登录商城账号，请先登录后再将商品加入购物车哦～";
             }
-            int qty = request.quantity() != null && request.quantity() > 0 ? request.quantity() : 1;
-            String detailDesc = String.format("商品ID: %d, 数量: %d, 用户ID: %d", request.productId(), qty, uid);
-            AiToolExecutionContext.emitToolStep("cart_add", "正在将商品加入 Redis 购物车", detailDesc, "running");
-            log.info("[AI Tool] addToCart: productId={}, quantity={}, userId={}",
-                    request.productId(), qty, uid);
-            try {
-                Map<String, Object> body = Map.of(
-                        "productId", request.productId(),
-                        "quantity", qty,
-                        "userId", uid
-                );
-                var result = orderFeignClient.addToCart(body);
-                if (result != null && result.isSuccess()) {
-                    AiToolExecutionContext.emitToolStep("cart_add", "成功加入购物车", detailDesc, "success");
-                    return "成功将商品（ID: " + request.productId() + "，数量: " + qty + "）加入购物车！";
-                }
-                String msg = result != null ? result.getMessage() : "服务异常";
-                AiToolExecutionContext.emitToolStep("cart_add", "加入购物车失败", msg, "failed");
-                return "加入购物车失败：" + msg;
-            } catch (Exception e) {
-                log.error("加入购物车异常", e);
-                AiToolExecutionContext.emitToolStep("cart_add", "加入购物车异常", e.getMessage(), "failed");
-                return "加入购物车失败: " + e.getMessage();
+
+            // 智能适配：支持多商品列表 items 批量加购，或单商品 (productId, quantity)
+            List<CartItemSpec> toAdd = new ArrayList<>();
+            if (request.items() != null && !request.items().isEmpty()) {
+                toAdd.addAll(request.items());
+            } else if (request.productId() != null && request.productId() > 0) {
+                int qty = request.quantity() != null && request.quantity() > 0 ? request.quantity() : 1;
+                toAdd.add(new CartItemSpec(request.productId(), qty));
             }
+
+            if (toAdd.isEmpty()) {
+                return "未指定需要加购的商品ID";
+            }
+
+            String detailDesc = toAdd.stream()
+                    .map(it -> String.format("ID:%d x%d", it.productId(), (it.quantity() != null ? it.quantity() : 1)))
+                    .collect(Collectors.joining(", "));
+            AiToolExecutionContext.emitToolStep("cart_add", "正在执行购物车加购", detailDesc + ", 用户ID: " + uid, "running");
+            log.info("[AI Tool] addToCart: toAdd={}, userId={}", detailDesc, uid);
+
+            Map<String, Object> latestCart = null;
+            List<String> opResults = new ArrayList<>();
+
+            for (CartItemSpec item : toAdd) {
+                Long pid = item.productId();
+                int q = (item.quantity() != null && item.quantity() > 0) ? item.quantity() : 1;
+                try {
+                    Map<String, Object> body = Map.of(
+                            "productId", pid,
+                            "quantity", q,
+                            "userId", uid
+                    );
+                    var result = orderFeignClient.addToCart(body);
+                    if (result != null && result.isSuccess() && result.getData() != null) {
+                        latestCart = result.getData();
+                        opResults.add(String.format("商品ID %d x %d 件", pid, q));
+                    } else {
+                        String msg = result != null ? result.getMessage() : "服务异常";
+                        opResults.add(String.format("商品ID %d 加购失败(%s)", pid, msg));
+                    }
+                } catch (Exception ex) {
+                    log.error("加购商品异常: pid={}", pid, ex);
+                    opResults.add(String.format("商品ID %d 加购异常(%s)", pid, ex.getMessage()));
+                }
+            }
+
+            String opSummary = String.join("，", opResults);
+            AiToolExecutionContext.emitToolStep("cart_add", "加购执行完毕", opSummary, "success");
+
+            // 核心合并：直接附带最新购物车全量统计（总件数与总金额），杜绝大模型为了查金额再去二次调 getCartList
+            String cartDetail = (latestCart != null) ? formatCartSummary(latestCart) : "";
+            return String.format("成功执行加购（%s）！\n\n【最新购物车实时状态汇总】：\n%s",
+                    opSummary,
+                    cartDetail.isBlank() ? "已成功加入购物车" : cartDetail);
         });
     }
 
     @Bean
-    @Description("查询当前用户购物车中的所有商品列表、数量、单价与合计金额。当用户询问购物车内容或想看购物车时调用。")
+    @Description("查询当前用户购物车中的所有商品列表、数量、单价与合计金额。仅在用户单纯想要查看/浏览购物车清单时调用。加购商品时请直接调用 addToCart，无需重复调用本工具。")
     public BiFunction<GetCartRequest, ToolContext, String> getCartList() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getCartList", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
@@ -367,27 +404,11 @@ public class MallTools {
                     return "购物车暂无商品";
                 }
                 Map<String, Object> cart = result.getData();
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> items = (List<Map<String, Object>>) cart.get("items");
-                if (items == null || items.isEmpty()) {
-                    AiToolExecutionContext.emitToolStep("cart_query", "购物车为空", "用户ID: " + uid, "success");
-                    return "购物车暂无商品";
-                }
+                String summary = formatCartSummary(cart);
                 AiToolExecutionContext.emitToolStep("cart_query",
                         "购物车共 " + cart.getOrDefault("totalCount", 0) + " 件商品",
                         "已选总额: ¥" + cart.getOrDefault("totalAmount", 0), "success");
-
-                StringBuilder sb = new StringBuilder();
-                sb.append(String.format("购物车汇总：共 %s 件商品，已选 %s 件，已选总计 ¥%s\n商品明细：\n",
-                        cart.getOrDefault("totalCount", 0),
-                        cart.getOrDefault("selectedCount", 0),
-                        cart.getOrDefault("totalAmount", 0)));
-                for (Map<String, Object> item : items) {
-                    sb.append(String.format("- 商品: %s | 单价: ¥%s | 数量: %s | 小计: ¥%s | 状态: %s\n",
-                            item.get("productName"), item.get("price"), item.get("quantity"),
-                            item.get("subtotal"), Boolean.TRUE.equals(item.get("selected")) ? "已勾选" : "未勾选"));
-                }
-                return sb.toString();
+                return summary;
             } catch (Exception e) {
                 log.error("查询购物车异常", e);
                 AiToolExecutionContext.emitToolStep("cart_query", "查询购物车异常", e.getMessage(), "failed");
@@ -441,6 +462,31 @@ public class MallTools {
                 p.get("price"),
                 p.get("stock"),
                 desc);
+    }
+
+    /**
+     * 将购物车数据格式化为紧凑且信息完备的文本摘要
+     */
+    private String formatCartSummary(Map<String, Object> cart) {
+        if (cart == null) {
+            return "购物车为空";
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) cart.get("items");
+        if (items == null || items.isEmpty()) {
+            return "当前购物车是空的哦～";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("购物车汇总：共 %s 件商品，已选 %s 件，已选总计 ¥%s\n商品明细：\n",
+                cart.getOrDefault("totalCount", 0),
+                cart.getOrDefault("selectedCount", 0),
+                cart.getOrDefault("totalAmount", 0)));
+        for (Map<String, Object> item : items) {
+            sb.append(String.format("- 商品: %s | 单价: ¥%s | 数量: %s | 小计: ¥%s | 状态: %s\n",
+                    item.get("productName"), item.get("price"), item.get("quantity"),
+                    item.get("subtotal"), Boolean.TRUE.equals(item.get("selected")) ? "已勾选" : "未勾选"));
+        }
+        return sb.toString();
     }
 
     /**
