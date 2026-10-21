@@ -19,6 +19,7 @@ import java.util.Map;
 public class AiKnowledgeController {
 
     private final KnowledgeService knowledgeService;
+    private final com.aimall.ai.service.AiShoppingService aiShoppingService;
 
     /**
      * 手动触发默认导购专业知识库初始化（对标手册与规则切片，仅管理员可用）
@@ -69,5 +70,17 @@ public class AiKnowledgeController {
                 "dimensions", 1024,
                 "status", "ACTIVE"
         ));
+    }
+
+    /**
+     * 清理所有导购问句语义缓存（当修改商品数据或修复搜索逻辑后手动刷新）
+     */
+    @PostMapping("/cache/clear")
+    public Result<Map<String, Object>> clearCache() {
+        if (!UserContext.isAdmin()) {
+            return Result.fail(403, "无权限操作，仅管理员可清理语义缓存");
+        }
+        int count = aiShoppingService.clearSemanticCache();
+        return Result.success("导购语义缓存清理成功", Map.of("clearedKeys", count));
     }
 }

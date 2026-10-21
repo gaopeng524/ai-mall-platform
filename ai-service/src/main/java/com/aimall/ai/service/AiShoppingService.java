@@ -378,14 +378,14 @@ public class AiShoppingService {
 
                                 // P1-4: 同时还原缓存中的商品推荐卡片，杜绝“见上方卡片”但无卡片的尴尬
                                 String cachedAnswer = cachedPayload;
+                                List<Map<String, Object>> cachedProducts = null;
                                 try {
                                     JsonNode cachedNode = objectMapper.readTree(cachedPayload);
                                     if (cachedNode.has("products") && cachedNode.get("products").isArray()) {
-                                        List<Map<String, Object>> cachedProducts = objectMapper.convertValue(
+                                        cachedProducts = objectMapper.convertValue(
                                                 cachedNode.get("products"),
                                                 new TypeReference<List<Map<String, Object>>>() {}
                                         );
-                                        AiToolExecutionContext.emitProducts(cachedProducts);
                                     }
                                     if (cachedNode.has("answer")) {
                                         cachedAnswer = cachedNode.get("answer").asText();
@@ -394,12 +394,30 @@ public class AiShoppingService {
                                     cachedAnswer = cachedPayload;
                                 }
 
-                                emitChunkedText(sink, cachedAnswer);
-                                history.add(new UserMessage(userPrompt));
-                                history.add(new AssistantMessage(cachedAnswer));
-                                saveSessionHistory(effectiveSessionId, history, effectiveUserId);
-                                sink.complete();
-                                return;
+                                // 核心自愈：若缓存内容为负向“未在售/未找到/开小差”或属于查品找货却无商品卡片，判定为陈旧脏缓存，立即清除并穿透大模型实时决策
+                                if (isNegativeOrStaleCache(userPrompt, cachedAnswer, cachedProducts)) {
+                                    log.warn("[AI 语义缓存] 命中陈旧负向/空卡片缓存，自动驱逐脏数据并穿透执行大模型实时决策: key={}, prompt={}", queryCacheKey, userPrompt);
+                                    stringRedisTemplate.delete(queryCacheKey);
+                                } else {
+                                    meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "query").increment());
+                                    AiToolExecutionContext.emitToolStep(
+                                            "semantic_cache_hit",
+                                            "命中导购问句语义缓存，0ms 极速响应",
+                                            "热点问答语义库直出，首字延迟 0ms，节省 100% Token 成本",
+                                            "success"
+                                    );
+
+                                    if (cachedProducts != null && !cachedProducts.isEmpty()) {
+                                        AiToolExecutionContext.emitProducts(cachedProducts);
+                                    }
+
+                                    emitChunkedText(sink, cachedAnswer);
+                                    history.add(new UserMessage(userPrompt));
+                                    history.add(new AssistantMessage(cachedAnswer));
+                                    saveSessionHistory(effectiveSessionId, history, effectiveUserId);
+                                    sink.complete();
+                                    return;
+                                }
                             }
                         } catch (Exception e) {
                             log.debug("读取问句缓存略过: {}", e.getMessage());
@@ -570,17 +588,24 @@ public class AiShoppingService {
                     history.add(new AssistantMessage(finalAnswer));
                     saveSessionHistory(effectiveSessionId, history, effectiveUserId);
 
-                    // 10. 写入问句语义缓存（P1-5: 仅在主模型正常成功、未触发 Failover 降级时写入缓存，且同时缓存商品卡片）
+                    // 10. 写入问句语义缓存（严格校验：仅有效回答且非负向/非空结果才允许写入，杜绝缓存未在售/错误答复）
                     if (isCandidateForCache && queryCacheKey != null && callSucceeded && !isFailoverTriggered && fullResponse.length() > 0) {
                         try {
-                            Map<String, Object> cacheData = new HashMap<>();
-                            cacheData.put("answer", finalAnswer);
-                            cacheData.put("products", AiToolExecutionContext.getLastEmittedProducts());
-                            stringRedisTemplate.opsForValue().set(
-                                    queryCacheKey,
-                                    objectMapper.writeValueAsString(cacheData),
-                                    QUERY_CACHE_TTL
-                            );
+                            List<Map<String, Object>> emittedProducts = AiToolExecutionContext.getLastEmittedProducts();
+                            if (shouldCacheQueryResult(userPrompt, finalAnswer, emittedProducts)) {
+                                Map<String, Object> cacheData = new HashMap<>();
+                                cacheData.put("answer", finalAnswer);
+                                cacheData.put("products", emittedProducts);
+                                stringRedisTemplate.opsForValue().set(
+                                        queryCacheKey,
+                                        objectMapper.writeValueAsString(cacheData),
+                                        QUERY_CACHE_TTL
+                                );
+                                log.info("[AI 语义缓存] 写入问句语义缓存: key={}, productsCount={}",
+                                        queryCacheKey, (emittedProducts != null ? emittedProducts.size() : 0));
+                            } else {
+                                log.info("[AI 语义缓存] 问答判定为负向/空卡片/暂无在售结果，拒绝写入持久缓存: key={}, prompt={}", queryCacheKey, userPrompt);
+                            }
                         } catch (Exception ignored) {
                         }
                     }
@@ -952,5 +977,76 @@ public class AiShoppingService {
         }
         fallbackMemoryCache.invalidate(sessionId);
         log.info("[AI Agent] 会话已清除: sessionId={}, operatorUserId={}, role={}", sessionId, userId, userRole);
+    }
+
+    /**
+     * 判定缓存内容是否为负向/陈旧/空卡片结果（用于读取侧自愈）
+     */
+    private boolean isNegativeOrStaleCache(String userPrompt, String answer, List<Map<String, Object>> products) {
+        if (answer == null || answer.isBlank()) {
+            return true;
+        }
+        String lowerAns = answer.toLowerCase();
+        // 1. 负向/降级/不可用特征词拦截（绝不信任未在售/没有/抱歉等负向答复）
+        if (lowerAns.contains("暂时没有")
+                || lowerAns.contains("暂无")
+                || lowerAns.contains("没有在售")
+                || lowerAns.contains("暂未找到")
+                || lowerAns.contains("没找到")
+                || lowerAns.contains("未找到")
+                || lowerAns.contains("开小差")
+                || lowerAns.contains("网络出现抖动")
+                || lowerAns.contains("服务暂时不可用")
+                || lowerAns.contains("抱歉亲")
+                || lowerAns.contains("无法找到")) {
+            return true;
+        }
+
+        // 2. 若用户提问具备明显的找货/查品/推荐意图，必须伴随真实商品卡片
+        boolean isShoppingInquiry = userPrompt != null && (
+                userPrompt.contains("有") || userPrompt.contains("买") || userPrompt.contains("查")
+                || userPrompt.contains("推荐") || userPrompt.contains("手机") || userPrompt.contains("鞋")
+                || userPrompt.contains("多少钱") || userPrompt.contains("价格") || userPrompt.contains("在售")
+                || userPrompt.contains("果") || userPrompt.contains("米") || userPrompt.contains("苹果")
+                || userPrompt.contains("华为") || userPrompt.contains("耳机")
+        );
+
+        if (isShoppingInquiry && (products == null || products.isEmpty())) {
+            // 查品却无卡片推荐，很可能是暂时无货或未召回，绝不持久缓存
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 判定当前问答是否适合写入语义持久缓存（用于写入侧校验）
+     */
+    private boolean shouldCacheQueryResult(String userPrompt, String answer, List<Map<String, Object>> products) {
+        return !isNegativeOrStaleCache(userPrompt, answer, products);
+    }
+
+    /**
+     * 清理所有导购问句语义缓存与视觉解构缓存
+     */
+    public int clearSemanticCache() {
+        try {
+            int count = 0;
+            var qKeys = stringRedisTemplate.keys(REDIS_QUERY_CACHE_PREFIX + "*");
+            if (qKeys != null && !qKeys.isEmpty()) {
+                stringRedisTemplate.delete(qKeys);
+                count += qKeys.size();
+            }
+            var vKeys = stringRedisTemplate.keys(REDIS_VISUAL_CACHE_PREFIX + "*");
+            if (vKeys != null && !vKeys.isEmpty()) {
+                stringRedisTemplate.delete(vKeys);
+                count += vKeys.size();
+            }
+            log.info("[AI 语义缓存] 已成功清除语义缓存条数: {}", count);
+            return count;
+        } catch (Exception e) {
+            log.warn("[AI 语义缓存] 清理缓存异常: {}", e.getMessage());
+            return 0;
+        }
     }
 }

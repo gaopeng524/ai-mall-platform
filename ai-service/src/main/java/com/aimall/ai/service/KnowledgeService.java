@@ -33,6 +33,7 @@ public class KnowledgeService implements ApplicationRunner {
     private final VectorStore vectorStore;
     private final ProductFeignClient productFeignClient;
     private final JdbcTemplate jdbcTemplate;
+    private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -266,6 +267,20 @@ public class KnowledgeService implements ApplicationRunner {
 
             int added = batchAddDocuments(docs, 6);
             log.info("[AI RAG 知识库] 已成功从商品服务同步并 Embedding 写入 {} 款在售商品知识！", added);
+
+            // 商品数据同步后自动清理失效的导购问句语义缓存，保证用户提问即时反映最新商品
+            if (stringRedisTemplate != null) {
+                try {
+                    var keys = stringRedisTemplate.keys("ai:cache:query:*");
+                    if (keys != null && !keys.isEmpty()) {
+                        stringRedisTemplate.delete(keys);
+                        log.info("[AI RAG 知识库] 在售商品同步完毕，已联动清理清除 {} 条问句语义缓存", keys.size());
+                    }
+                } catch (Exception e) {
+                    log.warn("[AI RAG 知识库] 联动清理语义缓存略过: {}", e.getMessage());
+                }
+            }
+
             return added;
         } catch (Exception e) {
             log.error("[AI RAG 知识库] 同步在售商品向量知识异常: {}", e.getMessage(), e);
