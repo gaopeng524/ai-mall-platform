@@ -125,7 +125,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("根据商品ID查询单个商品的详细信息，包括规格、参数、实时库存、详细描述。当用户需要了解特定商品详情或对比商品时调用。")
+    @Description("根据商品ID查询单个商品的详细信息，包括规格、参数、实时库存、详细描述。仅在已知确切商品ID（如通过 searchProducts 检索结果获得）时调用，严禁盲目猜测或连续递增商品ID。")
     public BiFunction<DetailRequest, ToolContext, String> getProductDetail() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("getProductDetail", toolContext, request, () -> {
             String detailDesc = "商品ID: " + request.productId();
@@ -135,7 +135,9 @@ public class MallTools {
                 var result = productFeignClient.getById(request.productId());
                 if (result == null || result.getData() == null) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品详情未找到", detailDesc, "failed");
-                    return "未找到该商品的详细信息";
+                    return String.format("【未找到商品】商品ID %d 在商城中不存在。商城目前在售商品ID范围仅为 1~24。"
+                            + "绝对严禁继续盲目猜测或递增ID（如连续查询ID+1）！"
+                            + "若需要浏览或挑选商品，请立即调用 searchProducts（keyword传空字符串检索全部），或直接告知用户未找到该商品。", request.productId());
                 }
                 Map<String, Object> product = result.getData();
                 AiToolExecutionContext.emitToolStep("product_query",
@@ -146,7 +148,7 @@ public class MallTools {
             } catch (Exception e) {
                 log.error("查询商品详情失败", e);
                 AiToolExecutionContext.emitToolStep("product_query", "查询商品详情失败", e.getMessage(), "failed");
-                return "商品详情查询失败";
+                return "商品详情查询服务暂时不可用，请直接告知用户稍后再试，请勿反复循环重试";
             }
         });
     }

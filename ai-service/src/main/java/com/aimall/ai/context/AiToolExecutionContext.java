@@ -36,6 +36,10 @@ public class AiToolExecutionContext {
         private String traceId;
         private Consumer<String> eventConsumer;
         private volatile List<Map<String, Object>> lastEmittedProducts;
+        @Builder.Default
+        private final java.util.concurrent.atomic.AtomicInteger toolExecutionCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        @Builder.Default
+        private final java.util.concurrent.atomic.AtomicInteger consecutiveNotFoundCount = new java.util.concurrent.atomic.AtomicInteger(0);
     }
 
     /** 线程本地上下文绑定（支持父子线程继承） */
@@ -189,6 +193,24 @@ public class AiToolExecutionContext {
         log.info("[调用会话] sessionId={}, userId={}, traceId={}", sessionId, effectiveUserId, effectiveTrace);
         log.info("-------------------------------------------------------------");
 
+        // 核心风控熔断：杜绝大模型陷入死循环（如由于猜错ID，连续不断调用 getProductDetail(54), (55), (56)...）
+        if (targetCtx != null) {
+            int execCount = targetCtx.getToolExecutionCount().incrementAndGet();
+            int missCount = targetCtx.getConsecutiveNotFoundCount().get();
+            if (execCount > 5 || missCount >= 3) {
+                log.warn("[AI 工具熔断保护] 会话 {} 工具调用触发熔断: toolName={}, execCount={}, missCount={}",
+                        sessionId, toolName, execCount, missCount);
+                AiToolExecutionContext.emitToolStep(
+                        "tool_circuit_breaker",
+                        "系统安全熔断：工具调用已达保护上限",
+                        "已自动终止循环调用，正在为您呈现最佳导购回复",
+                        "failed"
+                );
+                return (T) ("【系统安全熔断】单轮对话工具调用已达安全上限（检测到连续多次检索不存在的编号或反复调用工具）。"
+                        + "严禁继续调用任何工具！请立即基于已有知识直接给用户友好的文字回复，或建议用户直接提供商品名称进行搜索！");
+            }
+        }
+
         long start = System.currentTimeMillis();
         try {
             // 核心解决：Spring AI 在 Netty reactor-http-nio 线程中执行工具时，Spring Cloud LoadBalancer
@@ -218,6 +240,16 @@ public class AiToolExecutionContext {
                     TraceContext.clear();
                 }
             }).get();
+
+            // 统计连续未命中/失败次数，用于快速触发熔断
+            if (targetCtx != null && result instanceof String strResult) {
+                if (strResult.contains("未找到") || strResult.contains("不存在") || strResult.contains("失败") || strResult.contains("拦截")) {
+                    targetCtx.getConsecutiveNotFoundCount().incrementAndGet();
+                } else {
+                    targetCtx.getConsecutiveNotFoundCount().set(0);
+                }
+            }
+
             long cost = System.currentTimeMillis() - start;
             log.info("<<<<<<<<<<<<<<<<<<<< [AI 工具调用·执行完成] <<<<<<<<<<<<<<<<<<<<");
             log.info("[工具名称] {}, [耗时] {} ms", toolName, cost);
