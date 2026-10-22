@@ -245,12 +245,13 @@ public class KnowledgeService implements ApplicationRunner {
                 String desc = String.valueOf(p.getOrDefault("description", ""));
 
                 String content = String.format("""
-                        【商城在售商品知识】
+                        【商城在售商品知识（静态参考，不含实时库存）】
                         - 商品ID：%s
                         - 商品名称：%s
                         - 所属品类：%s
                         - 官方售价：¥%s
                         - 核心卖点与规格描述：%s
+                        - 实时库存：【知识库不含库存，查库存必须调用 searchProducts 工具查库，绝对严禁编造】
                         """, id, name, category, price, desc);
 
                 Map<String, Object> metadata = new HashMap<>();

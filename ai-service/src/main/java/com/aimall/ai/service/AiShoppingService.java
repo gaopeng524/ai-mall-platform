@@ -145,6 +145,11 @@ public class AiShoppingService {
                - 用户要求取消某笔未支付订单时，调用 `cancelOrder`。
             
             行为准则：
+            - 【防幻觉严令·实时在售库存真实性】：
+              1. 【商品知识库参考】仅包含静态参数与官方标价，【绝对不包含实时动态库存】！
+              2. 凡是用户询问任何商品是否有货、还剩多少库存、剩余几件（如“咖啡机库存”、“李宁赤兔还有多少”），必须 100% 发起 `searchProducts` 工具调用向微服务查库！检索结果中的 [库存:xxx] 才是真实库存！
+              3. 严禁基于预置参考知识猜想或脑补库存！
+              4. 若工具返回服务受限、错误或已被 Sentinel 限流拦截，你必须如实诚实回答“商品查询服务正处于限流保护中，暂时无法获取实时库存”，【绝对零容忍凭空捏造任何库存数字】（严禁随口编造 58件、12件、20件 等虚假库存）！
             - 【库存与商品查询铁律】：用户询问任何商品是否有货、还剩多少库存时（如“李宁赤兔6跑鞋还有多少库存”），必须直接调用 `searchProducts(keyword="李宁赤兔")`。检索结果中的 [库存:xxx] 就是真实库存，严禁自造数字ID调用 getProductDetail！
             - 俗称与口语意图解析：当用户使用俗称、缩写或数码别名（如“果15/苹果15”指 iPhone 15，“米14”指小米 14，“遥遥领先/华为60”指华为 Mate 60，“狗屁王”指罗技 GPW，“赤兔”指李宁赤兔，“果耳”指 AirPods 等）时：
               1. 必须将其转换为规范商品名或通用品牌词（如“iPhone 15”、“苹果 手机”、“小米 14”、“李宁 赤兔”）调用 `searchProducts` 真实检索，绝对严禁未查库就主观断定“没有”！
@@ -443,12 +448,18 @@ public class AiShoppingService {
                             : "当前用户状态为【未登录访客】。用户可以自由浏览与咨询商品信息；但当用户要求加购物车、结算下单或查询个人订单时，工具将进行安全拦截，你应当亲切提示用户【请先登录商城账号】。";
 
                     String systemPrompt = SYSTEM_PROMPT.formatted(userAuthDesc)
-                            + (ragContext.isEmpty() ? "" : "\n\n【商品知识库参考】\n" + ragContext);
+                            + (ragContext.isEmpty() ? "" : "\n\n【商品知识库参考（注意：知识库仅收录静态规格与官方标价，绝无实时在售库存数据！凡涉及“库存”、“有货无货”，一律必须调用 searchProducts 工具向微服务查库，绝对严禁捏造库存！）】\n" + ragContext);
 
                     // 6. 调用 Agent 2 (选品风控与交易专家) 执行真流式 Function Calling
                     StringBuilder fullResponse = new StringBuilder();
 
                     try {
+                        // 【防幻觉强行拦截】：若用户提问涉及实时库存或有货无货，强制前置系统指令，杜绝大模型跳过工具调用
+                        String finalUserPrompt = actualAgentPrompt;
+                        if (!hasImage && isStockOrInventoryQuery(userPrompt)) {
+                            finalUserPrompt = "【系统指令：用户正在查询实时库存。注意【商品知识库参考】中不包含库存，你必须立即调用 `searchProducts` 工具向微服务查库！若微服务被 Sentinel 限流或报错，请如实告知用户当前限流中，绝对严禁捏造库存数字！】\n" + actualAgentPrompt;
+                        }
+
                         // 【核心修复 P1-1】：显式按 [SystemMessage, history..., UserMessage] 顺序组装 Prompt
                         // 避免 Spring AI 默认先追加 messages(history) 再追加 systemMessage 导致 system 沉底或被弱化
                         List<Message> promptMessages = new ArrayList<>();
@@ -456,7 +467,7 @@ public class AiShoppingService {
                         if (history != null && !history.isEmpty()) {
                             promptMessages.addAll(history);
                         }
-                        promptMessages.add(new UserMessage(actualAgentPrompt));
+                        promptMessages.add(new UserMessage(finalUserPrompt));
 
                         Map<String, Object> toolCtx = new HashMap<>();
                         toolCtx.put("sessionId", effectiveSessionId);
@@ -812,7 +823,21 @@ public class AiShoppingService {
                 || q.contains("退款") || q.contains("我的")
                 // 实时动效与库存属性严禁写入/读取语义缓存，必须穿透微服务获取实时数据
                 || q.contains("库存") || q.contains("还剩") || q.contains("多少件") || q.contains("多少双")
-                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货");
+                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货")
+                || q.contains("有没");
+    }
+
+    /**
+     * 判断是否为实时库存或在售现货状态询问
+     */
+    private boolean isStockOrInventoryQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        String q = query.toLowerCase();
+        return q.contains("库存") || q.contains("还剩") || q.contains("多少件") || q.contains("多少双")
+                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货")
+                || q.contains("有没");
     }
 
     /**
@@ -881,7 +906,7 @@ public class AiShoppingService {
             AiToolExecutionContext.emitToolStep(
                     "vector_search",
                     "已从 pgvector 向量库召回 " + docs.size() + " 条商品知识片段",
-                    "余弦相似度阈值 ≥ 0.60",
+                    "余弦相似度阈值 ≥ 0.60 (静态参考知识，不含实时库存)",
                     "success"
             );
             StringBuilder sb = new StringBuilder();

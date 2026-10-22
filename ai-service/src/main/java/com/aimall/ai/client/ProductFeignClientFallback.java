@@ -11,10 +11,10 @@ import java.util.Map;
 public class ProductFeignClientFallback implements ProductFeignClient {
     @Override
     public Result<List<Map<String, Object>>> search(String keyword, double maxPrice) {
-        return Result.fail("商品服务暂时不可用");
+        return Result.fail(429, "商品服务已被 Sentinel 限流保护，当前不可用");
     }
     @Override
     public Result<Map<String, Object>> getById(Long id) {
-        return Result.fail("商品服务暂时不可用");
+        return Result.fail(429, "商品详情服务已被 Sentinel 限流保护，当前不可用");
     }
 }

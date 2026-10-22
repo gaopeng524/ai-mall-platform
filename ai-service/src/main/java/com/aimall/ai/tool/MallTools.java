@@ -108,12 +108,25 @@ public class MallTools {
             log.info("[AI Tool] searchProducts: keyword={}, maxPrice={}", kw, price);
             try {
                 var result = productFeignClient.search(kw, price);
-                // 核心智能容错降级：若初次长关键词未命中，自动剥离口语或泛品类后缀泛化重试（如“李宁赤兔6跑鞋” -> “李宁赤兔”）
+                // 1. 优先捕获微服务 Sentinel 限流 (如 HTTP 429) 或 Feign 降级异常
+                if (result != null && result.getCode() != 200) {
+                    String errorMsg = result.getMessage() != null ? result.getMessage() : "商品服务已被限流或不可用";
+                    log.warn("[AI Tool] searchProducts 触发 Sentinel 限流/降级: code={}, msg={}", result.getCode(), errorMsg);
+                    AiToolExecutionContext.emitToolStep("product_query", "商品服务已被 Sentinel 限流拦截 (HTTP " + result.getCode() + ")", errorMsg, "failed");
+                    return "【服务受限】商品查询服务已被 Sentinel 限流保护（状态码: " + result.getCode() + "，" + errorMsg + "）。当前无法获取该商品的实时在售库存与详情。请直接且如实告知用户当前系统正在进行限流保护，暂时无法获取实时库存，建议稍后再试，绝对严禁向用户捏造任何虚假库存数字！";
+                }
+
+                // 2. 核心智能容错降级：若初次长关键词未命中，自动剥离口语或泛品类后缀泛化重试（如“李宁赤兔6跑鞋” -> “李宁赤兔”）
                 if ((result == null || result.getData() == null || result.getData().isEmpty()) && !kw.isBlank()) {
                     String relaxed = relaxKeyword(kw);
                     if (!relaxed.equalsIgnoreCase(kw.trim())) {
                         log.info("[AI Tool] searchProducts 初始关键词 '{}' 未查到商品，触发降级泛化重试: '{}'", kw, relaxed);
                         result = productFeignClient.search(relaxed, price);
+                        if (result != null && result.getCode() != 200) {
+                            String errorMsg = result.getMessage() != null ? result.getMessage() : "商品服务已被限流或不可用";
+                            AiToolExecutionContext.emitToolStep("product_query", "商品服务已被 Sentinel 限流拦截", errorMsg, "failed");
+                            return "【服务受限】商品查询服务已被 Sentinel 限流保护（" + errorMsg + "）。请如实告知用户当前服务限流，无法获取实时库存，绝对严禁捏造虚假库存！";
+                        }
                     }
                 }
 
@@ -149,6 +162,12 @@ public class MallTools {
             log.info("[AI Tool] getProductDetail: productId={}", request.productId());
             try {
                 var result = productFeignClient.getById(request.productId());
+                if (result != null && result.getCode() != 200) {
+                    String errorMsg = result.getMessage() != null ? result.getMessage() : "商品详情服务已被限流或不可用";
+                    log.warn("[AI Tool] getProductDetail 触发 Sentinel 限流/降级: code={}, msg={}", result.getCode(), errorMsg);
+                    AiToolExecutionContext.emitToolStep("product_query", "商品详情服务已被 Sentinel 限流拦截 (HTTP " + result.getCode() + ")", errorMsg, "failed");
+                    return "【服务受限】商品详情微服务已被 Sentinel 限流保护（状态码: " + result.getCode() + "，" + errorMsg + "）。无法查询该商品的详情与实时库存。请如实告知用户当前限流中，无法查询实时库存，绝对严禁凭空捏造！";
+                }
                 if (result == null || result.getData() == null) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品详情未找到", detailDesc, "failed");
                     return String.format("【调用错误拦截】商品ID %d 在商城中不存在！"
