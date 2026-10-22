@@ -25,21 +25,12 @@ import java.time.Duration;
 public class AiChatController {
 
     private final AiShoppingService aiShoppingService;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final com.aimall.ai.context.RedisFallbackManager redisFallbackManager;
 
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
 
     private boolean checkRateLimit(String identifier) {
-        try {
-            String key = "ai:ratelimit:" + identifier;
-            Long count = stringRedisTemplate.opsForValue().increment(key);
-            if (count != null && count == 1) {
-                stringRedisTemplate.expire(key, Duration.ofMinutes(1));
-            }
-            return count != null && count <= MAX_REQUESTS_PER_MINUTE;
-        } catch (Exception e) {
-            return true; // Redis 异常降级放行
-        }
+        return redisFallbackManager.checkRateLimit(identifier, MAX_REQUESTS_PER_MINUTE);
     }
 
     /**

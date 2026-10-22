@@ -40,6 +40,28 @@ public class AiConfig {
     }
 
     /**
+     * 配置 Lettuce Redis 客户端超短连接与指令超时（800ms），杜绝 Redis 宕机时 Lettuce 默认 60s 挂起阻塞
+     */
+    @Bean
+    public org.springframework.boot.autoconfigure.data.redis.LettuceClientConfigurationBuilderCustomizer lettuceCustomizer() {
+        return clientConfigurationBuilder -> {
+            clientConfigurationBuilder.commandTimeout(Duration.ofMillis(800));
+            clientConfigurationBuilder.clientOptions(
+                    io.lettuce.core.ClientOptions.builder()
+                            .socketOptions(
+                                    io.lettuce.core.SocketOptions.builder()
+                                            .connectTimeout(Duration.ofMillis(800))
+                                            .build()
+                            )
+                            .timeoutOptions(
+                                    io.lettuce.core.TimeoutOptions.enabled(Duration.ofMillis(800))
+                            )
+                            .build()
+            );
+        };
+    }
+
+    /**
      * 自定义 FunctionCallbackResolver 包装器：
      * 针对 DashScope/通义千问在流式 Tool Calling 时可能发送空 arguments("") 或无入参调用，
      * 自动补齐为 "{}" 空 JSON 对象，彻底消灭 Jackson MismatchedInputException (No content to map due to end-of-input) 异常！

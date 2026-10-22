@@ -65,6 +65,7 @@ public class AiShoppingService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+    private final com.aimall.ai.context.RedisFallbackManager redisFallbackManager;
 
     @Value("${spring.ai.openai.chat.api-key:${DASHSCOPE_API_KEY:}}")
     private String apiKey;
@@ -186,7 +187,7 @@ public class AiShoppingService {
         // 会话归属防窃取与沙箱隔离：若该 sessionId 已被某一用户绑定，其它用户（或匿名访客）强制沙箱隔离
         String safeSessionId = (sessionId != null && !sessionId.isBlank()) ? sessionId : "default_session";
         try {
-            String owner = stringRedisTemplate.opsForValue().get(REDIS_SESSION_OWNER_PREFIX + safeSessionId);
+            String owner = redisFallbackManager.getSessionOwner(safeSessionId);
             if (owner != null && !owner.isBlank()) {
                 if (effectiveUserId == null || !owner.equals(String.valueOf(effectiveUserId))) {
                     log.warn("[AI Session] 用户 {} 尝试读取归属于用户 {} 的会话 {}，自动沙箱隔离", effectiveUserId, owner, safeSessionId);
@@ -194,7 +195,7 @@ public class AiShoppingService {
                 }
             } else if (effectiveUserId != null && effectiveUserId > 0) {
                 // 首次创建会话，原子占位绑定所有者，防止并发抢占
-                stringRedisTemplate.opsForValue().setIfAbsent(REDIS_SESSION_OWNER_PREFIX + safeSessionId, String.valueOf(effectiveUserId), MEMORY_TTL);
+                redisFallbackManager.setSessionOwnerIfAbsent(safeSessionId, String.valueOf(effectiveUserId), MEMORY_TTL);
             }
         } catch (Exception ignored) {
         }
@@ -238,18 +239,7 @@ public class AiShoppingService {
                 boolean isFailoverTriggered = false;
 
                 // 同一会话并发互斥锁：防止同一会话多请求并发导致历史记忆覆盖、注册表串流与工具状态错乱
-                boolean lockAcquired = false;
-                try {
-                    Boolean ok = stringRedisTemplate.opsForValue().setIfAbsent(
-                            REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId,
-                            traceId,
-                            SESSION_LOCK_TTL
-                    );
-                    lockAcquired = Boolean.TRUE.equals(ok);
-                } catch (Exception e) {
-                    log.warn("[AI Session Lock] Redis 锁异常降级: {}", e.getMessage());
-                    lockAcquired = true; // Redis 异常时平滑降级放行
-                }
+                boolean lockAcquired = redisFallbackManager.acquireSessionLock(effectiveSessionId, traceId, SESSION_LOCK_TTL);
 
                 if (!lockAcquired) {
                     log.warn("[AI Session 并发拦截] 会话 {} 正在生成上一条回答中，拒绝并发抢占", effectiveSessionId);
@@ -284,7 +274,7 @@ public class AiShoppingService {
                         String imageHash = null;
                         try {
                             imageHash = DigestUtils.md5DigestAsHex(imageData.getBytes(StandardCharsets.UTF_8));
-                            String cachedVisual = stringRedisTemplate.opsForValue().get(REDIS_VISUAL_CACHE_PREFIX + imageHash);
+                            String cachedVisual = redisFallbackManager.getVisualCache(imageHash);
                             if (cachedVisual != null && !cachedVisual.isBlank()) {
                                 visualAttr = objectMapper.readValue(cachedVisual, new TypeReference<Map<String, Object>>() {});
                                 meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "visual").increment());
@@ -305,7 +295,7 @@ public class AiShoppingService {
                                     "已接收商品实物图片，正在进行视觉解构",
                                     "通义千问 qwen3.7-flash 极速视觉感知分析中...",
                                     "running"
-                            );
+                                );
 
                             visualAttr = callVisualAgent(userPrompt, imageData);
 
@@ -313,8 +303,8 @@ public class AiShoppingService {
                             if (imageHash != null && visualAttr != null && !visualAttr.isEmpty()
                                     && !Boolean.TRUE.equals(visualAttr.get("isFallback"))) {
                                 try {
-                                    stringRedisTemplate.opsForValue().set(
-                                            REDIS_VISUAL_CACHE_PREFIX + imageHash,
+                                    redisFallbackManager.putVisualCache(
+                                            imageHash,
                                             objectMapper.writeValueAsString(visualAttr),
                                             VISUAL_CACHE_TTL
                                     );
@@ -372,12 +362,11 @@ public class AiShoppingService {
 
                     // 3. 语义问句缓存（非图片、首轮会话且非交易操作时检查缓存）
                     boolean isCandidateForCache = !hasImage && history.isEmpty() && !isTransactionalQuery(userPrompt);
-                    String queryCacheKey = null;
+                    String queryHash = null;
                     if (isCandidateForCache) {
-                        String queryHash = DigestUtils.md5DigestAsHex(userPrompt.trim().toLowerCase().getBytes(StandardCharsets.UTF_8));
-                        queryCacheKey = REDIS_QUERY_CACHE_PREFIX + queryHash;
+                        queryHash = DigestUtils.md5DigestAsHex(userPrompt.trim().toLowerCase().getBytes(StandardCharsets.UTF_8));
                         try {
-                            String cachedPayload = stringRedisTemplate.opsForValue().get(queryCacheKey);
+                            String cachedPayload = redisFallbackManager.getQueryCache(queryHash);
                             if (cachedPayload != null && !cachedPayload.isBlank()) {
                                 meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "query").increment());
                                 AiToolExecutionContext.emitToolStep(
@@ -407,8 +396,8 @@ public class AiShoppingService {
 
                                 // 核心自愈：若缓存内容为负向“未在售/未找到/开小差”或属于查品找货却无商品卡片，判定为陈旧脏缓存，立即清除并穿透大模型实时决策
                                 if (isNegativeOrStaleCache(userPrompt, cachedAnswer, cachedProducts)) {
-                                    log.warn("[AI 语义缓存] 命中陈旧负向/空卡片缓存，自动驱逐脏数据并穿透执行大模型实时决策: key={}, prompt={}", queryCacheKey, userPrompt);
-                                    stringRedisTemplate.delete(queryCacheKey);
+                                    log.warn("[AI 语义缓存] 命中陈旧负向/空卡片缓存，自动驱逐脏数据并穿透执行大模型实时决策: hash={}, prompt={}", queryHash, userPrompt);
+                                    redisFallbackManager.deleteQueryCache(queryHash);
                                 } else {
                                     meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "query").increment());
                                     AiToolExecutionContext.emitToolStep(
@@ -600,22 +589,22 @@ public class AiShoppingService {
                     saveSessionHistory(effectiveSessionId, history, effectiveUserId);
 
                     // 10. 写入问句语义缓存（严格校验：仅有效回答且非负向/非空结果才允许写入，杜绝缓存未在售/错误答复）
-                    if (isCandidateForCache && queryCacheKey != null && callSucceeded && !isFailoverTriggered && fullResponse.length() > 0) {
+                    if (isCandidateForCache && queryHash != null && callSucceeded && !isFailoverTriggered && fullResponse.length() > 0) {
                         try {
                             List<Map<String, Object>> emittedProducts = AiToolExecutionContext.getLastEmittedProducts();
-                            if (shouldCacheQueryResult(userPrompt, finalAnswer, emittedProducts)) {
+                            if (shouldCacheQueryResult(userPrompt, finalAnswer, emittedProducts) && queryHash != null) {
                                 Map<String, Object> cacheData = new HashMap<>();
                                 cacheData.put("answer", finalAnswer);
                                 cacheData.put("products", emittedProducts);
-                                stringRedisTemplate.opsForValue().set(
-                                        queryCacheKey,
+                                redisFallbackManager.putQueryCache(
+                                        queryHash,
                                         objectMapper.writeValueAsString(cacheData),
                                         QUERY_CACHE_TTL
                                 );
-                                log.info("[AI 语义缓存] 写入问句语义缓存: key={}, productsCount={}",
-                                        queryCacheKey, (emittedProducts != null ? emittedProducts.size() : 0));
+                                log.info("[AI 语义缓存] 写入问句语义缓存: hash={}, productsCount={}",
+                                        queryHash, (emittedProducts != null ? emittedProducts.size() : 0));
                             } else {
-                                log.info("[AI 语义缓存] 问答判定为负向/空卡片/暂无在售结果，拒绝写入持久缓存: key={}, prompt={}", queryCacheKey, userPrompt);
+                                log.info("[AI 语义缓存] 问答判定为负向/空卡片/暂无在售结果，拒绝写入持久缓存: hash={}, prompt={}", queryHash, userPrompt);
                             }
                         } catch (Exception ignored) {
                         }
@@ -630,13 +619,7 @@ public class AiShoppingService {
                         sink.complete();
                     }
                 } finally {
-                    try {
-                        String lockHolder = stringRedisTemplate.opsForValue().get(REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId);
-                        if (traceId.equals(lockHolder)) {
-                            stringRedisTemplate.delete(REDIS_SESSION_ACTIVE_LOCK_PREFIX + effectiveSessionId);
-                        }
-                    } catch (Exception ignored) {
-                    }
+                    redisFallbackManager.releaseSessionLock(effectiveSessionId, traceId);
                     heartbeatExecutor.shutdown();
                     AiToolExecutionContext.clear(effectiveSessionId, effectiveUserId);
                     TraceContext.clear();
@@ -913,12 +896,11 @@ public class AiShoppingService {
     }
 
     /**
-     * 从 Redis 加载会话历史（若 Redis 不可达则降级读取本地内存）
+     * 从 Redis 加载会话历史（若 Redis 熔断或宕机则 0ms 自动平滑降级读取本地 Caffeine 内存）
      */
     private List<Message> loadSessionHistory(String sessionId) {
-        String redisKey = REDIS_MEMORY_PREFIX + sessionId;
         try {
-            String json = stringRedisTemplate.opsForValue().get(redisKey);
+            String json = redisFallbackManager.getSessionMemoryJson(sessionId);
             if (json != null && !json.isBlank()) {
                 List<Map<String, String>> rawList = objectMapper.readValue(
                         json, new TypeReference<List<Map<String, String>>>() {});
@@ -935,47 +917,36 @@ public class AiShoppingService {
                 return messages;
             }
         } catch (Exception e) {
-            log.debug("[AI Memory] Redis 读取降级为本地内存: {}", e.getMessage());
+            log.debug("[AI Memory] 会话历史解析异常: {}", e.getMessage());
         }
-        List<Message> localMemory = fallbackMemoryCache.getIfPresent(sessionId);
-        return localMemory != null ? new ArrayList<>(localMemory) : new ArrayList<>();
+        return new ArrayList<>();
     }
 
     /**
-     * 保存会话历史至 Redis（保留最近 20 条消息，30 分钟滑动过期），并记录/刷新 session 属主
+     * 保存会话历史至 Redis（若 Redis 不可用则 0ms 降级保存至本地内存，保留最近 20 条，30 分钟滑动过期）
      */
     private void saveSessionHistory(String sessionId, List<Message> history, Long userId) {
         if (history.size() > MAX_HISTORY_MESSAGES) {
             history = new ArrayList<>(history.subList(history.size() - MAX_HISTORY_MESSAGES, history.size()));
         }
-        fallbackMemoryCache.put(sessionId, new CopyOnWriteArrayList<>(history));
-
-        String redisKey = REDIS_MEMORY_PREFIX + sessionId;
         try {
             List<Map<String, String>> serializableList = new ArrayList<>(history.size());
             for (Message msg : history) {
                 String role = (msg instanceof AssistantMessage) ? "assistant" : "user";
                 serializableList.add(Map.of("role", role, "content", msg.getContent()));
             }
-            stringRedisTemplate.opsForValue().set(
-                    redisKey,
-                    objectMapper.writeValueAsString(serializableList),
-                    MEMORY_TTL
-            );
+            String json = objectMapper.writeValueAsString(serializableList);
+            redisFallbackManager.saveSessionMemoryJson(sessionId, json, MEMORY_TTL);
             if (userId != null && userId > 0) {
-                stringRedisTemplate.opsForValue().set(
-                        REDIS_SESSION_OWNER_PREFIX + sessionId,
-                        String.valueOf(userId),
-                        MEMORY_TTL
-                );
+                redisFallbackManager.setSessionOwnerIfAbsent(sessionId, String.valueOf(userId), MEMORY_TTL);
             }
         } catch (Exception e) {
-            log.debug("[AI Memory] Redis 写入跳过，已保存至本地兜底缓存: {}", e.getMessage());
+            log.debug("[AI Memory] 保存会话历史异常: {}", e.getMessage());
         }
     }
 
     /**
-     * 清空会话记忆（需校验会话属主或管理员权限）
+     * 清空会话记忆（需校验会话属主或管理员权限，支持 Redis 与本地内存双清）
      */
     public void clearSession(String sessionId, Long userId, String userRole) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -983,19 +954,17 @@ public class AiShoppingService {
         }
         boolean isAdmin = UserContext.isAdmin(userRole);
         try {
-            String owner = stringRedisTemplate.opsForValue().get(REDIS_SESSION_OWNER_PREFIX + sessionId);
+            String owner = redisFallbackManager.getSessionOwner(sessionId);
             if (owner != null && !owner.isBlank() && !isAdmin) {
                 if (userId == null || !owner.equals(String.valueOf(userId))) {
                     throw new BusinessException(403, "无权清除他人的会话记忆");
                 }
             }
-            stringRedisTemplate.delete(REDIS_SESSION_OWNER_PREFIX + sessionId);
-            stringRedisTemplate.delete(REDIS_MEMORY_PREFIX + sessionId);
+            redisFallbackManager.clearSession(sessionId);
         } catch (BusinessException be) {
             throw be;
         } catch (Exception ignored) {
         }
-        fallbackMemoryCache.invalidate(sessionId);
         log.info("[AI Agent] 会话已清除: sessionId={}, operatorUserId={}, role={}", sessionId, userId, userRole);
     }
 
@@ -1050,6 +1019,9 @@ public class AiShoppingService {
      * 清理所有导购问句语义缓存与视觉解构缓存
      */
     public int clearSemanticCache() {
+        if (!redisFallbackManager.isAvailable()) {
+            return 0;
+        }
         try {
             int count = 0;
             var qKeys = stringRedisTemplate.keys(REDIS_QUERY_CACHE_PREFIX + "*");

@@ -39,6 +39,8 @@ spring:
       port: 6379
       password: ${REDIS_PASSWORD:}
       database: 1
+      timeout: 800ms
+      connect-timeout: 800ms
 
   ai:
     openai:
