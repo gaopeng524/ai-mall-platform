@@ -40,6 +40,9 @@ public class AiToolExecutionContext {
         private final java.util.concurrent.atomic.AtomicInteger toolExecutionCount = new java.util.concurrent.atomic.AtomicInteger(0);
         @Builder.Default
         private final java.util.concurrent.atomic.AtomicInteger consecutiveNotFoundCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        /** 单次提问（单轮 Turn）内商品服务是否已触发 Sentinel 429 限流（该标记随本轮回答结束 clear() 自动销毁，不影响下一句提问） */
+        @Builder.Default
+        private volatile boolean productServiceRateLimited = false;
     }
 
     /** 线程本地上下文绑定（支持父子线程继承） */
@@ -372,5 +375,23 @@ public class AiToolExecutionContext {
     public static List<Map<String, Object>> getLastEmittedProducts() {
         SessionContext ctx = getActiveContext();
         return ctx != null ? ctx.getLastEmittedProducts() : null;
+    }
+
+    /**
+     * 标记当前这轮回答（单次请求生命周期内）商品服务已触发 Sentinel 限流
+     */
+    public static void markProductServiceRateLimited() {
+        SessionContext ctx = getActiveContext();
+        if (ctx != null) {
+            ctx.setProductServiceRateLimited(true);
+        }
+    }
+
+    /**
+     * 判断当前这轮回答内商品服务是否已处于限流状态
+     */
+    public static boolean isProductServiceRateLimited() {
+        SessionContext ctx = getActiveContext();
+        return ctx != null && ctx.isProductServiceRateLimited();
     }
 }

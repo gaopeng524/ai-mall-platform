@@ -95,6 +95,14 @@ deepseek:
   base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
   model: ${DEEPSEEK_MODEL:deepseek-chat}
 
+ai:
+  rag:
+    similarity-threshold: ${AI_RAG_SIMILARITY_THRESHOLD:0.50}
+  semantic-cache:
+    enabled: ${AI_SEMANTIC_CACHE_ENABLED:true}
+    similarity-threshold: ${AI_SEMANTIC_CACHE_THRESHOLD:0.92}
+    ttl: ${AI_SEMANTIC_CACHE_TTL:6h}
+
 
 logging:
   level:

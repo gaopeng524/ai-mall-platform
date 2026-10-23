@@ -2,6 +2,7 @@ package com.aimall.ai.service;
 
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
+import com.aimall.ai.intent.QueryIntentClassifier;
 import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
 import com.aimall.common.trace.TraceContext;
@@ -66,6 +67,10 @@ public class AiShoppingService {
     private final ObjectMapper objectMapper;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
     private final com.aimall.ai.context.RedisFallbackManager redisFallbackManager;
+    private final SemanticCacheService semanticCacheService;
+
+    @Value("${ai.rag.similarity-threshold:0.50}")
+    private double ragSimilarityThreshold;
 
     @Value("${spring.ai.openai.chat.api-key:${DASHSCOPE_API_KEY:}}")
     private String apiKey;
@@ -365,21 +370,15 @@ public class AiShoppingService {
                     // 2. 加载会话历史（优先从 Redis 读取）
                     List<Message> history = loadSessionHistory(effectiveSessionId);
 
-                    // 3. 语义问句缓存（非图片、首轮会话且非交易操作时检查缓存）
+                    // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话且非交易/库存问句时启用）
                     boolean isCandidateForCache = !hasImage && history.isEmpty() && !isTransactionalQuery(userPrompt);
-                    String queryHash = null;
+                    SemanticCacheService.Lookup cacheLookup = null;
                     if (isCandidateForCache) {
-                        queryHash = DigestUtils.md5DigestAsHex(userPrompt.trim().toLowerCase().getBytes(StandardCharsets.UTF_8));
                         try {
-                            String cachedPayload = redisFallbackManager.getQueryCache(queryHash);
-                            if (cachedPayload != null && !cachedPayload.isBlank()) {
-                                meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "query").increment());
-                                AiToolExecutionContext.emitToolStep(
-                                        "semantic_cache_hit",
-                                        "命中导购问句语义缓存，0ms 极速响应",
-                                        "热点问答语义库直出，首字延迟 0ms，节省 100% Token 成本",
-                                        "success"
-                                );
+                            cacheLookup = semanticCacheService.lookup(userPrompt);
+                            if (cacheLookup.isHit()) {
+                                SemanticCacheService.Hit hit = cacheLookup.hit();
+                                String cachedPayload = hit.payload();
 
                                 // P1-4: 同时还原缓存中的商品推荐卡片，杜绝“见上方卡片”但无卡片的尴尬
                                 String cachedAnswer = cachedPayload;
@@ -401,14 +400,19 @@ public class AiShoppingService {
 
                                 // 核心自愈：若缓存内容为负向“未在售/未找到/开小差”或属于查品找货却无商品卡片，判定为陈旧脏缓存，立即清除并穿透大模型实时决策
                                 if (isNegativeOrStaleCache(userPrompt, cachedAnswer, cachedProducts)) {
-                                    log.warn("[AI 语义缓存] 命中陈旧负向/空卡片缓存，自动驱逐脏数据并穿透执行大模型实时决策: hash={}, prompt={}", queryHash, userPrompt);
-                                    redisFallbackManager.deleteQueryCache(queryHash);
+                                    log.warn("[AI 语义缓存] 命中陈旧负向/空卡片缓存，自动驱逐脏数据并穿透执行大模型实时决策: prompt={}", userPrompt);
+                                    semanticCacheService.evict(userPrompt, hit);
                                 } else {
-                                    meterRegistryProvider.ifAvailable(mr -> mr.counter("ai.cache.hits", "type", "query").increment());
+                                    String stepTitle = "semantic".equals(hit.level())
+                                            ? String.format("命中导购问句语义缓存 (相似度 %.2f)，极速响应", hit.similarity())
+                                            : "命中导购问句精确缓存，0ms 极速响应";
+                                    String stepDetail = "semantic".equals(hit.level())
+                                            ? "匹配同义问句：「" + hit.matchedQuery() + "」，节省大模型推理 Token"
+                                            : "热点问答缓存直出，首字延迟 0ms，节省 100% Token 成本";
                                     AiToolExecutionContext.emitToolStep(
                                             "semantic_cache_hit",
-                                            "命中导购问句语义缓存，0ms 极速响应",
-                                            "热点问答语义库直出，首字延迟 0ms，节省 100% Token 成本",
+                                            stepTitle,
+                                            stepDetail,
                                             "success"
                                     );
 
@@ -599,23 +603,24 @@ public class AiShoppingService {
                     history.add(new AssistantMessage(finalAnswer));
                     saveSessionHistory(effectiveSessionId, history, effectiveUserId);
 
-                    // 10. 写入问句语义缓存（严格校验：仅有效回答且非负向/非空结果才允许写入，杜绝缓存未在售/错误答复）
-                    if (isCandidateForCache && queryHash != null && callSucceeded && !isFailoverTriggered && fullResponse.length() > 0) {
+                    // 10. 写入两级问句语义缓存（严格校验：仅有效回答且非负向/非空结果才允许写入，杜绝缓存未在售/错误答复）
+                    if (isCandidateForCache && callSucceeded && !isFailoverTriggered && fullResponse.length() > 0) {
                         try {
                             List<Map<String, Object>> emittedProducts = AiToolExecutionContext.getLastEmittedProducts();
-                            if (shouldCacheQueryResult(userPrompt, finalAnswer, emittedProducts) && queryHash != null) {
+                            if (shouldCacheQueryResult(userPrompt, finalAnswer, emittedProducts)) {
                                 Map<String, Object> cacheData = new HashMap<>();
                                 cacheData.put("answer", finalAnswer);
                                 cacheData.put("products", emittedProducts);
-                                redisFallbackManager.putQueryCache(
-                                        queryHash,
+                                float[] reusedEmbedding = (cacheLookup != null) ? cacheLookup.embedding() : null;
+                                semanticCacheService.put(
+                                        userPrompt,
                                         objectMapper.writeValueAsString(cacheData),
-                                        QUERY_CACHE_TTL
+                                        reusedEmbedding
                                 );
-                                log.info("[AI 语义缓存] 写入问句语义缓存: hash={}, productsCount={}",
-                                        queryHash, (emittedProducts != null ? emittedProducts.size() : 0));
+                                log.info("[AI 语义缓存] 写入两级问句语义缓存: prompt='{}', productsCount={}",
+                                        userPrompt, (emittedProducts != null ? emittedProducts.size() : 0));
                             } else {
-                                log.info("[AI 语义缓存] 问答判定为负向/空卡片/暂无在售结果，拒绝写入持久缓存: hash={}, prompt={}", queryHash, userPrompt);
+                                log.info("[AI 语义缓存] 问答判定为负向/空卡片/暂无在售结果，拒绝写入持久缓存: prompt={}", userPrompt);
                             }
                         } catch (Exception ignored) {
                         }
@@ -812,32 +817,18 @@ public class AiShoppingService {
 
     /**
      * 判断是否为交易类、个性化私有操作或强时效动态数据（严禁读取或写入静态语义缓存）
+     * 委托给 {@link QueryIntentClassifier#isTransactional(String)}，采用词组级匹配，避免“车厘子”等单字误判。
      */
     private boolean isTransactionalQuery(String query) {
-        if (query == null || query.isBlank()) {
-            return false;
-        }
-        String q = query.toLowerCase();
-        return q.contains("买") || q.contains("下单") || q.contains("车") || q.contains("购物车")
-                || q.contains("订单") || q.contains("支付") || q.contains("结算") || q.contains("取消")
-                || q.contains("退款") || q.contains("我的")
-                // 实时动效与库存属性严禁写入/读取语义缓存，必须穿透微服务获取实时数据
-                || q.contains("库存") || q.contains("还剩") || q.contains("多少件") || q.contains("多少双")
-                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货")
-                || q.contains("有没");
+        return QueryIntentClassifier.isTransactional(query);
     }
 
     /**
      * 判断是否为实时库存或在售现货状态询问
+     * 委托给 {@link QueryIntentClassifier#isStockQuery(String)}。
      */
     private boolean isStockOrInventoryQuery(String query) {
-        if (query == null || query.isBlank()) {
-            return false;
-        }
-        String q = query.toLowerCase();
-        return q.contains("库存") || q.contains("还剩") || q.contains("多少件") || q.contains("多少双")
-                || q.contains("有货") || q.contains("余量") || q.contains("几件") || q.contains("现货")
-                || q.contains("有没");
+        return QueryIntentClassifier.isStockQuery(query);
     }
 
     /**
@@ -898,7 +889,7 @@ public class AiShoppingService {
                     SearchRequest.builder()
                             .query(query)
                             .topK(3)
-                            .similarityThreshold(0.40)
+                            .similarityThreshold(ragSimilarityThreshold)
                             .build());
             if (docs == null || docs.isEmpty()) {
                 return "";
@@ -906,7 +897,7 @@ public class AiShoppingService {
             AiToolExecutionContext.emitToolStep(
                     "vector_search",
                     "已从 pgvector 向量库召回 " + docs.size() + " 条商品知识片段",
-                    "余弦相似度阈值 ≥ 0.60 (静态参考知识，不含实时库存)",
+                    String.format("余弦相似度阈值 ≥ %.2f (静态参考知识，不含实时库存)", ragSimilarityThreshold),
                     "success"
             );
             StringBuilder sb = new StringBuilder();
