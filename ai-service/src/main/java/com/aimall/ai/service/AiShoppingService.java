@@ -1,10 +1,13 @@
 package com.aimall.ai.service;
 
+import com.aimall.ai.client.OrderFeignClient;
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
+import com.aimall.ai.dto.OrderConfirmDraft;
 import com.aimall.ai.intent.QueryIntentClassifier;
 import com.aimall.common.context.UserContext;
 import com.aimall.common.exception.BusinessException;
+import com.aimall.common.result.Result;
 import com.aimall.common.trace.TraceContext;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -62,6 +65,7 @@ public class AiShoppingService {
 
     private final ChatClient chatClient;
     private final ProductFeignClient productFeignClient;
+    private final OrderFeignClient orderFeignClient;
     private final VectorStore vectorStore;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
@@ -420,6 +424,12 @@ public class AiShoppingService {
                                         AiToolExecutionContext.emitProducts(cachedProducts);
                                     }
 
+                                    // 向前端推送 100% 节省的 Token 统计指标与可观测性
+                                    AiToolExecutionContext.emitTokenUsage(0, 0, 0, "semantic_cache", 0.0, true);
+                                    meterRegistryProvider.ifAvailable(mr -> {
+                                        mr.counter("ai.tokens.cached", "type", "hit").increment();
+                                    });
+
                                     emitChunkedText(sink, cachedAnswer);
                                     history.add(new UserMessage(userPrompt));
                                     history.add(new AssistantMessage(cachedAnswer));
@@ -597,6 +607,20 @@ public class AiShoppingService {
                         finalAnswer = "已为您检索到相关商品，详情请查看上方的商品推荐卡片～";
                         sink.next(AiToolExecutionContext.formatChunkEvent(finalAnswer));
                     }
+
+                    // 推送 Token 用量与成本统计（生产级可观测性）
+                    String activeModel = isFailoverTriggered ? deepSeekModel : chatModel;
+                    int promptTokens = estimatePromptTokens(history, userPrompt, true);
+                    int completionTokens = estimateCompletionTokens(finalAnswer);
+                    int totalTokens = promptTokens + completionTokens;
+                    double costYuan = calculateCostRmb(activeModel, promptTokens, completionTokens);
+
+                    AiToolExecutionContext.emitTokenUsage(promptTokens, completionTokens, totalTokens, activeModel, costYuan, false);
+                    meterRegistryProvider.ifAvailable(mr -> {
+                        mr.counter("ai.tokens.prompt", "model", activeModel).increment(promptTokens);
+                        mr.counter("ai.tokens.completion", "model", activeModel).increment(completionTokens);
+                        mr.counter("ai.tokens.total", "model", activeModel).increment(totalTokens);
+                    });
 
                     // 9. 保存会话历史至 Redis (记录当前轮用户提问与回答)
                     history.add(new UserMessage(hasImage ? "[拍立淘识别] " + userPrompt : userPrompt));
@@ -1029,6 +1053,100 @@ public class AiShoppingService {
      */
     private boolean shouldCacheQueryResult(String userPrompt, String answer, List<Map<String, Object>> products) {
         return !isNegativeOrStaleCache(userPrompt, answer, products);
+    }
+
+    /**
+     * 确认并提交待确认订单草稿（Human-in-the-Loop）
+     */
+    public Result<Map<String, Object>> confirmOrderDraft(String confirmToken, Long userId) {
+        String draftJson = redisFallbackManager.getOrderDraft(confirmToken);
+        if (draftJson == null || draftJson.isBlank()) {
+            return Result.fail("订单确认草稿已过期或不存在，请重新在对话中发起购买");
+        }
+        OrderConfirmDraft draft;
+        try {
+            draft = objectMapper.readValue(draftJson, OrderConfirmDraft.class);
+        } catch (Exception e) {
+            log.error("反序列化订单草稿失败: confirmToken={}", confirmToken, e);
+            return Result.fail("订单确认草稿数据异常");
+        }
+
+        if (draft.userId() != null && !draft.userId().equals(userId)) {
+            return Result.fail("无权确认他人生成的订单草稿");
+        }
+
+        if (System.currentTimeMillis() > draft.expireAt()) {
+            redisFallbackManager.deleteOrderDraft(confirmToken);
+            return Result.fail("订单确认草稿已过期（超过5分钟有效期），请重新发起下单");
+        }
+
+        try {
+            if ("CART".equalsIgnoreCase(draft.orderType())) {
+                var cartResult = orderFeignClient.checkoutCart(userId);
+                if (cartResult != null && cartResult.isSuccess() && cartResult.getData() != null) {
+                    redisFallbackManager.deleteOrderDraft(confirmToken);
+                    Map<String, Object> data = cartResult.getData();
+                    Map<String, Object> resp = new HashMap<>(data);
+                    resp.put("orderType", "CART");
+                    resp.put("summary", draft.summary());
+                    return Result.success("购物车合并结算下单成功", resp);
+                }
+                String err = (cartResult != null && cartResult.getMessage() != null) ? cartResult.getMessage() : "购物车结算失败";
+                return Result.fail(err);
+            } else {
+                int qty = (draft.quantity() != null && draft.quantity() > 0) ? draft.quantity() : 1;
+                var orderResult = orderFeignClient.createOrder(draft.productId(), qty, userId);
+                if (orderResult != null && orderResult.isSuccess() && orderResult.getData() != null) {
+                    redisFallbackManager.deleteOrderDraft(confirmToken);
+                    String orderNo = orderResult.getData();
+                    Map<String, Object> resp = Map.of(
+                            "orderNo", orderNo,
+                            "orderType", "SINGLE",
+                            "productId", draft.productId() != null ? draft.productId() : 0L,
+                            "productName", draft.productName() != null ? draft.productName() : "",
+                            "quantity", qty,
+                            "totalAmount", draft.totalAmount() != null ? draft.totalAmount() : 0.0,
+                            "summary", draft.summary() != null ? draft.summary() : ""
+                    );
+                    return Result.success("订单创建成功", resp);
+                }
+                String err = (orderResult != null && orderResult.getMessage() != null) ? orderResult.getMessage() : "下单失败或库存不足";
+                return Result.fail(err);
+            }
+        } catch (Exception ex) {
+            log.error("确认并执行订单草稿异常: confirmToken={}", confirmToken, ex);
+            return Result.fail("提交订单异常: " + ex.getMessage());
+        }
+    }
+
+    private int estimatePromptTokens(List<Message> history, String userPrompt, boolean hasTools) {
+        int charCount = (userPrompt != null ? userPrompt.length() : 0);
+        if (history != null) {
+            for (Message m : history) {
+                if (m != null && m.getContent() != null) {
+                    charCount += m.getContent().length();
+                }
+            }
+        }
+        charCount += 1200; // System Prompt 预估字符
+        int baseTokens = (int) Math.ceil(charCount * 0.85);
+        if (hasTools) {
+            baseTokens += 950; // 微服务 Function Calling JSON Schema 消耗
+        }
+        return Math.max(baseTokens, 50);
+    }
+
+    private int estimateCompletionTokens(String completionText) {
+        if (completionText == null || completionText.isBlank()) {
+            return 0;
+        }
+        return Math.max((int) Math.ceil(completionText.length() * 0.85), 1);
+    }
+
+    private double calculateCostRmb(String model, int promptTokens, int completionTokens) {
+        double promptRate = (model != null && model.contains("deepseek")) ? 0.001 : 0.0005;
+        double completionRate = 0.002;
+        return (promptTokens * promptRate + completionTokens * completionRate) / 1000.0;
     }
 
     /**

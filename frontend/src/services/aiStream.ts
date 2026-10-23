@@ -1,4 +1,4 @@
-import { ToolCallStep, Product } from '../types';
+import { ToolCallStep, Product, OrderConfirmDraft, TokenUsage } from '../types';
 
 export interface StreamEventCallbacks {
   onChunk: (text: string) => void;
@@ -9,6 +9,8 @@ export interface StreamEventCallbacks {
     status: 'running' | 'success' | 'failed';
   }) => void;
   onEmbeddedProducts?: (products: Product[]) => void;
+  onOrderConfirmDraft?: (draft: OrderConfirmDraft) => void;
+  onTokenUsage?: (usage: TokenUsage) => void;
   onComplete: () => void;
   onError: (error: Error) => void;
 }
@@ -170,6 +172,29 @@ export async function startAiStream(
                 originalPrice: p.originalPrice ? Number(p.originalPrice) : undefined
               }));
               callbacks.onEmbeddedProducts?.(normalizedProducts);
+            } else if (eventObj.event === 'order_confirm') {
+              callbacks.onOrderConfirmDraft?.({
+                confirmToken: String(eventObj.confirmToken),
+                orderType: eventObj.orderType === 'CART' ? 'CART' : 'SINGLE',
+                productId: eventObj.productId ? Number(eventObj.productId) : undefined,
+                productName: String(eventObj.productName || '待确认商品'),
+                price: eventObj.price != null ? Number(eventObj.price) : undefined,
+                quantity: Number(eventObj.quantity || 1),
+                totalAmount: Number(eventObj.totalAmount || 0),
+                imageUrl: eventObj.imageUrl ? String(eventObj.imageUrl) : undefined,
+                expireAt: Number(eventObj.expireAt || (Date.now() + 300000)),
+                summary: eventObj.summary ? String(eventObj.summary) : undefined,
+                confirmed: false
+              });
+            } else if (eventObj.event === 'token_usage') {
+              callbacks.onTokenUsage?.({
+                promptTokens: Number(eventObj.promptTokens || 0),
+                completionTokens: Number(eventObj.completionTokens || 0),
+                totalTokens: Number(eventObj.totalTokens || 0),
+                model: String(eventObj.model || 'qwen3.7-flash'),
+                costYuan: String(eventObj.costYuan || '0.0000'),
+                cached: Boolean(eventObj.cached)
+              });
             }
             continue;
           } catch (parseErr) {

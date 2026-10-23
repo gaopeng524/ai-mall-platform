@@ -3,19 +3,21 @@ package com.aimall.ai.tool;
 import com.aimall.ai.client.OrderFeignClient;
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
+import com.aimall.ai.dto.OrderConfirmDraft;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Description;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
@@ -30,11 +32,27 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Configuration
-@RequiredArgsConstructor
 public class MallTools {
 
     private final ProductFeignClient productFeignClient;
     private final OrderFeignClient orderFeignClient;
+    private final com.aimall.ai.context.RedisFallbackManager redisFallbackManager;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public MallTools(ProductFeignClient productFeignClient,
+                     OrderFeignClient orderFeignClient,
+                     com.aimall.ai.context.RedisFallbackManager redisFallbackManager,
+                     com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        this.productFeignClient = productFeignClient;
+        this.orderFeignClient = orderFeignClient;
+        this.redisFallbackManager = redisFallbackManager;
+        this.objectMapper = objectMapper;
+    }
+
+    public MallTools(ProductFeignClient productFeignClient, OrderFeignClient orderFeignClient) {
+        this(productFeignClient, orderFeignClient, null, new com.fasterxml.jackson.databind.ObjectMapper());
+    }
 
     public record SearchRequest(
             @JsonPropertyDescription("搜索关键词，如商品名称、类别、品牌等，查全部可传空字符串") String keyword,
@@ -52,10 +70,12 @@ public class MallTools {
 
     public record CreateOrderRequest(
             @JsonPropertyDescription("商品ID") Long productId,
-            @JsonPropertyDescription("购买数量，默认1") Integer quantity
+            @JsonPropertyDescription("购买数量，默认1") Integer quantity,
+            @JsonPropertyDescription("用户是否已二次确认下单（若用户是首次提出购买/下单，请传 false；仅当用户在看到草稿确认卡片后明确表达确认下单，如回答“确认下单”、“确定购买”、“是的直接买”时，才传 true）") Boolean confirmed
     ) {
         public CreateOrderRequest {
             if (quantity == null || quantity <= 0) quantity = 1;
+            if (confirmed == null) confirmed = false;
         }
     }
 
@@ -92,7 +112,13 @@ public class MallTools {
 
     public record GetCartRequest() {}
 
-    public record CheckoutCartRequest() {}
+    public record CheckoutCartRequest(
+            @JsonPropertyDescription("用户是否已二次确认结算购物车（若用户首次提出结算，传 false；仅当用户在确认卡片中点击或明确回复“确认结算”、“确认下单”后才传 true）") Boolean confirmed
+    ) {
+        public CheckoutCartRequest {
+            if (confirmed == null) confirmed = false;
+        }
+    }
 
     @Bean
     @Description("【首选核心查询工具】根据关键词、商品名称、品牌（如“李宁赤兔”、“iPhone 15”、“跑鞋”等）和预算搜索商品列表，返回商品ID、名称、分类、价格、实时库存与核心卖点。凡是用户按名称找商品、询问商品库存、查询价格、或者未获知确切数字ID时，必须百分之百调用此工具！")
@@ -198,7 +224,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("为当前登录用户直接创建订单。当用户明确表示要立即购买/下单某商品时调用。需要提供商品ID和购买数量。")
+    @Description("为当前登录用户直接创建订单。当用户表示要购买/下单某商品时调用。若用户尚未二次确认，会自动生成待确认草稿卡片（confirmed=false）；当用户明确二次确认下单时执行真正落单扣库（confirmed=true）。")
     public BiFunction<CreateOrderRequest, ToolContext, String> createOrder() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("createOrder", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
@@ -207,9 +233,85 @@ public class MallTools {
                 return "【安全拦截】您当前尚未登录商城账号，请先登录后再进行购买下单操作哦～";
             }
             int qty = (request.quantity() != null && request.quantity() > 0) ? request.quantity() : 1;
+
+            // 1. 若用户未二次确认（首次提出要买/下单），先校验商品与库存，生成待确认订单卡片（Human-in-the-Loop 拦截保护）
+            if (!Boolean.TRUE.equals(request.confirmed())) {
+                AiToolExecutionContext.emitToolStep("order_confirm", "正在校验商品与库存并生成待确认订单草稿",
+                        String.format("商品ID: %d, 欲购数量: %d", request.productId(), qty), "running");
+                try {
+                    var prodResult = productFeignClient.getById(request.productId());
+                    if (prodResult == null || !prodResult.isSuccess() || prodResult.getData() == null) {
+                        AiToolExecutionContext.emitToolStep("order_confirm", "预校验失败", "商品不存在或查询异常", "failed");
+                        return "【核验提示】未查询到商品信息（ID: " + request.productId() + "），请确认商品是否在售。";
+                    }
+                    Map<String, Object> product = prodResult.getData();
+                    String productName = String.valueOf(product.getOrDefault("name", "商城精选好物"));
+                    double price = 0.0;
+                    try {
+                        price = Double.parseDouble(String.valueOf(product.get("price")));
+                    } catch (Exception ignored) {}
+                    int stock = 0;
+                    try {
+                        stock = Integer.parseInt(String.valueOf(product.get("stock")));
+                    } catch (Exception ignored) {}
+                    if (stock < qty) {
+                        AiToolExecutionContext.emitToolStep("order_confirm", "库存不足拦截",
+                                String.format("当前库存: %d, 欲购数量: %d", stock, qty), "failed");
+                        return String.format("【库存不足】商品【%s】当前仅剩 %d 件，无法满足 %d 件的购买需求，请调整购买数量。",
+                                productName, stock, qty);
+                    }
+
+                    String confirmToken = "CONFIRM_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                    double totalAmount = Math.round(price * qty * 100.0) / 100.0;
+                    String imageUrl = String.valueOf(product.getOrDefault("imageUrl", ""));
+                    long now = System.currentTimeMillis();
+                    long expireAt = now + 5 * 60 * 1000L;
+                    String summary = String.format("%s x %d 件，总计 ¥%.2f", productName, qty, totalAmount);
+
+                    OrderConfirmDraft draft = new OrderConfirmDraft(
+                            confirmToken, uid, request.productId(), productName, price, qty,
+                            totalAmount, imageUrl, "SINGLE", summary, now, expireAt
+                    );
+
+                    if (redisFallbackManager != null) {
+                        try {
+                            String draftJson = objectMapper.writeValueAsString(draft);
+                            redisFallbackManager.putOrderDraft(confirmToken, draftJson, Duration.ofMinutes(5));
+                        } catch (Exception ex) {
+                            log.warn("[AI Tool] 保存订单草稿异常: {}", ex.getMessage());
+                        }
+                    }
+
+                    Map<String, Object> draftMap = Map.of(
+                            "confirmToken", confirmToken,
+                            "orderType", "SINGLE",
+                            "productId", request.productId(),
+                            "productName", productName,
+                            "price", price,
+                            "quantity", qty,
+                            "totalAmount", totalAmount,
+                            "imageUrl", imageUrl,
+                            "expireAt", expireAt,
+                            "summary", summary
+                    );
+                    AiToolExecutionContext.emitOrderConfirm(draftMap);
+                    AiToolExecutionContext.emitToolStep("order_confirm", "已生成订单确认卡片（待二次确认）",
+                            String.format("商品: %s x%d | 预估总额: ¥%.2f", productName, qty, totalAmount), "success");
+
+                    return String.format("【待用户二次确认】已为您生成待确认订单卡片（Token: %s）：商品【%s】x %d 件，单价 ¥%.2f，合计金额 ¥%.2f。\n"
+                                    + "已向用户前端推送待确认卡片。请告知用户核对商品与金额，点击卡片上的【确认下单】按钮或直接回复【确认下单】即可完成落单并唤起收银台。",
+                            confirmToken, productName, qty, price, totalAmount);
+                } catch (Exception e) {
+                    log.error("生成订单确认草稿异常", e);
+                    AiToolExecutionContext.emitToolStep("order_confirm", "生成草稿异常", e.getMessage(), "failed");
+                    return "生成订单草稿失败：" + e.getMessage();
+                }
+            }
+
+            // 2. 用户已二次确认，执行真正的微服务订单创建并扣减库存
             String detailDesc = String.format("商品ID: %d, 数量: %d, 用户ID: %d", request.productId(), qty, uid);
-            AiToolExecutionContext.emitToolStep("order_create", "正在通过事务通道创建订单并锁定库存", detailDesc, "running");
-            log.info("[AI Tool] createOrder: productId={}, quantity={}, userId={}",
+            AiToolExecutionContext.emitToolStep("order_create", "用户已二次确认，正在通过事务通道创建订单并锁定库存", detailDesc, "running");
+            log.info("[AI Tool] createOrder (confirmed=true): productId={}, quantity={}, userId={}",
                     request.productId(), qty, uid);
             try {
                 var result = orderFeignClient.createOrder(request.productId(), qty, uid);
@@ -446,7 +548,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("将用户购物车中已勾选的商品一键合并结算下单，生成订单并进入收银台。当用户明确表示要结算购物车或购买购物车内商品时调用。")
+    @Description("将用户购物车中已勾选的商品一键合并结算下单，生成订单并进入收银台。若用户尚未二次确认，生成待确认结算卡片（confirmed=false）；若已明确二次确认，执行真正结算（confirmed=true）。")
     public BiFunction<CheckoutCartRequest, ToolContext, String> checkoutCart() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("checkoutCart", toolContext, request, () -> {
             Long uid = AiToolExecutionContext.getCurrentUserId();
@@ -454,8 +556,74 @@ public class MallTools {
                 AiToolExecutionContext.emitToolStep("auth_check", "操作拦截：用户未登录", "结算购物车需先登录商城账号", "failed");
                 return "【安全拦截】您当前尚未登录商城账号，请先登录后再结算购物车哦～";
             }
-            AiToolExecutionContext.emitToolStep("order_create", "正在合并结算购物车已选商品", "用户ID: " + uid, "running");
-            log.info("[AI Tool] checkoutCart: userId={}", uid);
+
+            // 1. 若用户未二次确认，核算购物车勾选清单与总额，推送待确认结算卡片（Human-in-the-Loop）
+            if (!Boolean.TRUE.equals(request.confirmed())) {
+                AiToolExecutionContext.emitToolStep("order_confirm", "正在核算购物车已选商品", "用户ID: " + uid, "running");
+                try {
+                    var cartResult = orderFeignClient.getCartList(uid);
+                    if (cartResult == null || cartResult.getData() == null) {
+                        AiToolExecutionContext.emitToolStep("order_confirm", "购物车为空", "用户ID: " + uid, "failed");
+                        return "【核验提示】您的购物车目前是空的，请先添加心仪商品后再发起结算～";
+                    }
+                    Map<String, Object> cart = cartResult.getData();
+                    int selectedCount = 0;
+                    try {
+                        selectedCount = Integer.parseInt(String.valueOf(cart.getOrDefault("selectedCount", 0)));
+                    } catch (Exception ignored) {}
+                    if (selectedCount <= 0) {
+                        AiToolExecutionContext.emitToolStep("order_confirm", "未勾选商品", "用户ID: " + uid, "failed");
+                        return "【核验提示】您的购物车中暂未勾选任何商品，请在购物车勾选需要结算的商品后再试～";
+                    }
+                    double totalAmount = 0.0;
+                    try {
+                        totalAmount = Double.parseDouble(String.valueOf(cart.getOrDefault("totalAmount", 0.0)));
+                    } catch (Exception ignored) {}
+
+                    String confirmToken = "CONFIRM_CART_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                    long now = System.currentTimeMillis();
+                    long expireAt = now + 5 * 60 * 1000L;
+                    String summary = String.format("购物车合并结算：共 %d 件已选商品，合计 ¥%.2f", selectedCount, totalAmount);
+
+                    OrderConfirmDraft draft = new OrderConfirmDraft(
+                            confirmToken, uid, null, "购物车合并结算商品(" + selectedCount + "件)",
+                            totalAmount, selectedCount, totalAmount, "", "CART", summary, now, expireAt
+                    );
+
+                    if (redisFallbackManager != null) {
+                        try {
+                            String draftJson = objectMapper.writeValueAsString(draft);
+                            redisFallbackManager.putOrderDraft(confirmToken, draftJson, Duration.ofMinutes(5));
+                        } catch (Exception ex) {
+                            log.warn("[AI Tool] 保存购物车结算草稿异常: {}", ex.getMessage());
+                        }
+                    }
+
+                    Map<String, Object> draftMap = Map.of(
+                            "confirmToken", confirmToken,
+                            "orderType", "CART",
+                            "productName", "购物车合并结算商品(" + selectedCount + "件)",
+                            "quantity", selectedCount,
+                            "totalAmount", totalAmount,
+                            "expireAt", expireAt,
+                            "summary", summary
+                    );
+                    AiToolExecutionContext.emitOrderConfirm(draftMap);
+                    AiToolExecutionContext.emitToolStep("order_confirm", "已生成购物车结算确认卡片（待二次确认）", summary, "success");
+
+                    return String.format("【待用户二次确认】已生成购物车合并结算待确认卡片（Token: %s）：共勾选 %d 件商品，合计金额 ¥%.2f。\n"
+                                    + "已向用户前端推送待确认卡片。请告知用户核对金额，点击卡片上的【确认结算】按钮或直接回复【确认结算】即可完成落单并唤起收银台。",
+                            confirmToken, selectedCount, totalAmount);
+                } catch (Exception e) {
+                    log.error("核算购物车结算草稿异常", e);
+                    AiToolExecutionContext.emitToolStep("order_confirm", "购物车核算异常", e.getMessage(), "failed");
+                    return "核算购物车失败：" + e.getMessage();
+                }
+            }
+
+            // 2. 用户已二次确认，执行真正的微服务合并结算
+            AiToolExecutionContext.emitToolStep("order_create", "用户已二次确认，正在合并结算购物车已选商品", "用户ID: " + uid, "running");
+            log.info("[AI Tool] checkoutCart (confirmed=true): userId={}", uid);
             try {
                 var result = orderFeignClient.checkoutCart(uid);
                 if (result != null && result.isSuccess() && result.getData() != null) {

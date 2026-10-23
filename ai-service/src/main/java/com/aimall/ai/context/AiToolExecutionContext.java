@@ -378,6 +378,49 @@ public class AiToolExecutionContext {
     }
 
     /**
+     * 向前端实时推送待确认订单草稿卡片（Human-in-the-Loop）
+     */
+    public static void emitOrderConfirm(Map<String, Object> draftMap) {
+        SessionContext ctx = getActiveContext();
+        if (ctx == null || ctx.getEventConsumer() == null || draftMap == null || draftMap.isEmpty()) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new java.util.HashMap<>(draftMap);
+            payload.put("event", "order_confirm");
+            String eventLine = AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(payload);
+            ctx.getEventConsumer().accept(eventLine);
+        } catch (Exception e) {
+            log.warn("[AI Event] emitOrderConfirm error: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 向前端推送本轮对话的 Token 消耗与成本统计（生产级可观测性）
+     */
+    public static void emitTokenUsage(int promptTokens, int completionTokens, int totalTokens, String model, double costYuan, boolean cached) {
+        SessionContext ctx = getActiveContext();
+        if (ctx == null || ctx.getEventConsumer() == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = Map.of(
+                    "event", "token_usage",
+                    "promptTokens", promptTokens,
+                    "completionTokens", completionTokens,
+                    "totalTokens", totalTokens,
+                    "model", model != null ? model : "qwen3.7-flash",
+                    "costYuan", String.format("%.4f", costYuan),
+                    "cached", cached
+            );
+            String eventLine = AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(payload);
+            ctx.getEventConsumer().accept(eventLine);
+        } catch (Exception e) {
+            log.warn("[AI Event] emitTokenUsage error: {}", e.getMessage());
+        }
+    }
+
+    /**
      * 标记当前这轮回答（单次请求生命周期内）商品服务已触发 Sentinel 限流
      */
     public static void markProductServiceRateLimited() {

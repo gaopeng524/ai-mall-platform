@@ -17,6 +17,7 @@ import {
   Minimize2,
   Camera,
   Eye,
+  Check,
   Image as ImageIcon
 } from 'lucide-react';
 import { ChatMessage, Product } from '../types';
@@ -55,6 +56,60 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [confirmingTokens, setConfirmingTokens] = useState<Record<string, boolean>>({});
+  const [confirmedTokens, setConfirmedTokens] = useState<Record<string, { orderNo?: string; message: string }>>({});
+
+  const handleConfirmOrderDraft = async (confirmToken: string, messageId: string) => {
+    setConfirmingTokens((prev) => ({ ...prev, [confirmToken]: true }));
+    try {
+      const targetBase = gatewayUrl.replace(/\/+$/, '');
+      const res = await fetch(`${targetBase}/api/ai/chat/order/confirm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ confirmToken })
+      });
+      const data = await res.json();
+      if (res.ok && data.code === 200) {
+        const orderNo = data.data?.orderNo || data.data?.primaryOrderNo || '';
+        setConfirmedTokens((prev) => ({
+          ...prev,
+          [confirmToken]: { orderNo, message: data.message || '下单成功' }
+        }));
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id === messageId && msg.orderConfirmDraft) {
+              return {
+                ...msg,
+                orderConfirmDraft: { ...msg.orderConfirmDraft, confirmed: true }
+              };
+            }
+            return msg;
+          })
+        );
+        onOrderChanged?.();
+      } else {
+        alert(data.message || '确认下单失败，请稍后重试');
+      }
+    } catch (err: any) {
+      alert('网络请求异常：' + (err.message || '服务不可达'));
+    } finally {
+      setConfirmingTokens((prev) => ({ ...prev, [confirmToken]: false }));
+    }
+  };
+
+  const handleCancelDraft = (messageId: string) => {
+    setMessages((prev) =>
+      prev.map((msg) => {
+        if (msg.id === messageId) {
+          return { ...msg, orderConfirmDraft: undefined };
+        }
+        return msg;
+      })
+    );
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -234,6 +289,24 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
             prev.map((msg) =>
               msg.id === assistantMessageId
                 ? { ...msg, embeddedProducts: products }
+                : msg
+            )
+          );
+        },
+        onOrderConfirmDraft: (draft) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, orderConfirmDraft: draft }
+                : msg
+            )
+          );
+        },
+        onTokenUsage: (usage) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, tokenUsage: usage }
                 : msg
             )
           );
@@ -470,6 +543,109 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Human-in-the-Loop 待确认订单交互卡片 */}
+            {msg.orderConfirmDraft && (
+              <div className="w-full max-w-[92%] sm:max-w-[85%] mt-2.5 p-3.5 bg-gradient-to-br from-amber-50 to-orange-50/50 rounded-xl border border-amber-200/80 shadow-xs">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-amber-200/60">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+                    <ShieldCheck className="w-4 h-4 text-amber-600" />
+                    <span>订单二次确认（防误触保护）</span>
+                  </div>
+                  <span className="text-[10px] text-amber-600 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">
+                    5分钟内有效
+                  </span>
+                </div>
+
+                <div className="mt-2.5 flex items-start gap-3">
+                  {msg.orderConfirmDraft.imageUrl ? (
+                    <img
+                      src={msg.orderConfirmDraft.imageUrl}
+                      alt={msg.orderConfirmDraft.productName}
+                      className="w-12 h-12 rounded-lg object-cover bg-white border border-amber-200/50 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-lg bg-amber-100 border border-amber-200/50 flex items-center justify-center shrink-0">
+                      <ShoppingCart className="w-5 h-5 text-amber-600" />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 text-xs">
+                    <div className="font-bold text-slate-800 truncate">
+                      {msg.orderConfirmDraft.productName}
+                    </div>
+                    <div className="text-slate-500 mt-0.5 text-[11px]">
+                      {msg.orderConfirmDraft.orderType === 'CART'
+                        ? `共 ${msg.orderConfirmDraft.quantity} 件已选商品合并结算`
+                        : `单价: ¥${Number(msg.orderConfirmDraft.price || 0).toFixed(2)} · 数量: ${msg.orderConfirmDraft.quantity} 件`}
+                    </div>
+                    <div className="mt-1 font-bold text-rose-600 text-sm">
+                      待支付金额：¥{Number(msg.orderConfirmDraft.totalAmount).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 操作区 */}
+                <div className="mt-3 pt-2.5 border-t border-amber-200/60 flex items-center justify-end gap-2">
+                  {msg.orderConfirmDraft.confirmed || confirmedTokens[msg.orderConfirmDraft.confirmToken] ? (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-100/80 px-3 py-1.5 rounded-lg w-full justify-center">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>已确认下单并锁定库存！单号：{confirmedTokens[msg.orderConfirmDraft.confirmToken]?.orderNo || '已提交'}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleCancelDraft(msg.id)}
+                        disabled={confirmingTokens[msg.orderConfirmDraft.confirmToken]}
+                        className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-amber-100/60 rounded-lg transition-colors cursor-pointer"
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={() => handleConfirmOrderDraft(msg.orderConfirmDraft!.confirmToken, msg.id)}
+                        disabled={confirmingTokens[msg.orderConfirmDraft.confirmToken]}
+                        className="px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 active:scale-95 rounded-lg transition-all shadow-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                      >
+                        {confirmingTokens[msg.orderConfirmDraft.confirmToken] ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>正在落单...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>确认下单支付</span>
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 生产级 Token 消耗与成本可观测性徽章 */}
+            {msg.tokenUsage && (
+              <div className="w-full max-w-[92%] sm:max-w-[85%] mt-1.5 flex items-center gap-2 text-[10px] text-slate-400 select-none">
+                {msg.tokenUsage.cached ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-medium">
+                    <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
+                    <span>命中语义缓存 · 首字 0ms · 节省 100% Token</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/60">
+                    <Zap className="w-2.5 h-2.5 text-amber-500" />
+                    <span>
+                      消耗 <strong className="font-semibold text-slate-700">{msg.tokenUsage.totalTokens}</strong> Tokens
+                      (入 {msg.tokenUsage.promptTokens} / 出 {msg.tokenUsage.completionTokens})
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span>预估成本 <strong className="font-semibold text-slate-700">¥{msg.tokenUsage.costYuan}</strong></span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-500">{msg.tokenUsage.model}</span>
+                  </span>
+                )}
               </div>
             )}
 

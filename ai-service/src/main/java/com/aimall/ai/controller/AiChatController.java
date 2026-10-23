@@ -83,6 +83,25 @@ public class AiChatController {
     }
 
     /**
+     * 确认并提交待确认订单草稿（Human-in-the-Loop）
+     * 客户端在待确认卡片中点击“确认下单/结算”后调用
+     */
+    @PostMapping("/order/confirm")
+    public Result<java.util.Map<String, Object>> confirmOrder(
+            @RequestBody java.util.Map<String, String> body,
+            @RequestHeader(value = "X-User-Id", required = false) Long headerUserId) {
+        Long effectiveUserId = (headerUserId != null && headerUserId > 0) ? headerUserId : UserContext.getUserId();
+        if (effectiveUserId == null || effectiveUserId <= 0) {
+            return Result.fail("未登录或登录已过期，请先登录商城账号");
+        }
+        String confirmToken = (body != null) ? body.get("confirmToken") : null;
+        if (confirmToken == null || confirmToken.isBlank()) {
+            return Result.fail("缺少确认凭据 confirmToken");
+        }
+        return aiShoppingService.confirmOrderDraft(confirmToken.trim(), effectiveUserId);
+    }
+
+    /**
      * 清除会话上下文（同时清理 Redis 与本地内存缓存，支持属主与管理员校验）
      */
     @DeleteMapping("/session/{sessionId}")

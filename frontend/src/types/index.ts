@@ -39,6 +39,7 @@ export type ToolCallStep =
   | 'visual_cache_hit'    // 视觉解构缓存命中
   | 'semantic_cache_hit'  // 导购问句语义缓存命中
   | 'failover_routing'    // 多模型高可用容灾路由
+  | 'order_confirm'       // Human-in-the-Loop 待确认订单草稿
   | 'product_query'       // Feign RPC 查商品
   | 'product_detail'      // Feign RPC 商品详情
   | 'order_create'        // Feign RPC 创建订单
@@ -49,6 +50,29 @@ export type ToolCallStep =
   | 'cart_checkout'       // Feign RPC 结算购物车
   | 'auth_check'          // 认证与风控校验
   | 'done';
+
+export interface OrderConfirmDraft {
+  confirmToken: string;
+  orderType: 'SINGLE' | 'CART';
+  productId?: number;
+  productName: string;
+  price?: number;
+  quantity: number;
+  totalAmount: number;
+  imageUrl?: string;
+  expireAt: number;
+  summary?: string;
+  confirmed?: boolean;
+}
+
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  model: string;
+  costYuan: string;
+  cached: boolean;
+}
 
 export interface ChatMessage {
   id: string;
@@ -63,6 +87,8 @@ export interface ChatMessage {
     status: 'running' | 'success' | 'failed';
   }[];
   embeddedProducts?: Product[];
+  orderConfirmDraft?: OrderConfirmDraft;
+  tokenUsage?: TokenUsage;
 }
 
 export interface CartItem {

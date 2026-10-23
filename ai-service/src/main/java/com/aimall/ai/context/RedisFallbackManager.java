@@ -84,6 +84,12 @@ public class RedisFallbackManager {
             .expireAfterWrite(Duration.ofHours(24))
             .build();
 
+    /** 本地订单待确认草稿缓存（Human-in-the-Loop）：confirmToken -> Json (TTL: 10 分钟) */
+    private final Cache<String, String> localDraftCache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .build();
+
     // =========================================================================
     // 状态机与探活核心逻辑
     // =========================================================================
@@ -349,6 +355,38 @@ public class RedisFallbackManager {
      */
     public void deleteQueryCache(String queryHash) {
         String key = "ai:cache:query:" + queryHash;
+        execute(
+                () -> stringRedisTemplate.delete(key),
+                () -> {}
+        );
+    }
+
+    /**
+     * 7. 待确认订单草稿存储（Human-in-the-Loop）
+     */
+    public void putOrderDraft(String confirmToken, String jsonPayload, Duration ttl) {
+        String key = "ai:order:draft:" + confirmToken;
+        localDraftCache.put(confirmToken, jsonPayload);
+        execute(
+                () -> stringRedisTemplate.opsForValue().set(key, jsonPayload, ttl),
+                () -> {}
+        );
+    }
+
+    public String getOrderDraft(String confirmToken) {
+        String key = "ai:order:draft:" + confirmToken;
+        return execute(
+                () -> {
+                    String val = stringRedisTemplate.opsForValue().get(key);
+                    return (val != null && !val.isBlank()) ? val : localDraftCache.getIfPresent(confirmToken);
+                },
+                () -> localDraftCache.getIfPresent(confirmToken)
+        );
+    }
+
+    public void deleteOrderDraft(String confirmToken) {
+        String key = "ai:order:draft:" + confirmToken;
+        localDraftCache.invalidate(confirmToken);
         execute(
                 () -> stringRedisTemplate.delete(key),
                 () -> {}
