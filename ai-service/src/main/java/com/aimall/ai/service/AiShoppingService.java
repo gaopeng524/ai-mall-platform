@@ -82,7 +82,7 @@ public class AiShoppingService {
     @Value("${spring.ai.openai.chat.base-url:https://dashscope.aliyuncs.com/compatible-mode}")
     private String chatBaseUrl;
 
-    @Value("${spring.ai.openai.chat.options.model:qwen3.7-flash}")
+    @Value("${spring.ai.openai.chat.options.model:qwen3.8-flash}")
     private String chatModel;
 
     @Value("${deepseek.api-key:${DEEPSEEK_API_KEY:}}")
@@ -154,6 +154,9 @@ public class AiShoppingService {
                - 用户要求取消某笔未支付订单时，调用 `cancelOrder`。
             
             行为准则：
+            - 【选品推荐与对比铁律·杜绝凭空空谈】：
+              1. 当用户询问商品推荐（如“推荐一款键盘”、“有没有200以内的鼠标”）、商品参数对比（如“对比小米14和苹果15”）、或寻找平替（如“索尼XM5平替”）时，你【必须百分之百先调用 searchProducts】检索商城真实上架商品！
+              2. 严禁脱离本商城真实在售商品直接凭空推荐或空谈对比！必须根据 searchProducts 检索到的在售商品名称、价格与核心卖点回答用户。
             - 【防幻觉严令·实时在售库存真实性】：
               1. 【商品知识库参考】仅包含静态参数与官方标价，【绝对不包含实时动态库存】！
               2. 凡是用户询问任何商品是否有货、还剩多少库存、剩余几件（如“咖啡机库存”、“李宁赤兔还有多少”），必须百分之百发起 `searchProducts` 工具调用向微服务查库！检索结果中的 [库存:xxx] 才是真实库存！
@@ -374,8 +377,10 @@ public class AiShoppingService {
                     // 2. 加载会话历史（优先从 Redis 读取）
                     List<Message> history = loadSessionHistory(effectiveSessionId);
 
-                    // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话且非交易/库存问句时启用）
-                    boolean isCandidateForCache = !hasImage && history.isEmpty() && !QueryIntentClassifier.isTransactional(userPrompt);
+                    // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话、非交易/库存问句且非评测测试会话时启用）
+                    boolean isCandidateForCache = !hasImage && history.isEmpty()
+                            && !QueryIntentClassifier.isTransactional(userPrompt)
+                            && (effectiveSessionId == null || !effectiveSessionId.startsWith("eval_bench_"));
                     SemanticCacheService.Lookup cacheLookup = null;
                     if (isCandidateForCache) {
                         try {
@@ -468,10 +473,12 @@ public class AiShoppingService {
                     StringBuilder fullResponse = new StringBuilder();
 
                     try {
-                        // 【防幻觉强行拦截】：若用户提问涉及实时库存或有货无货，强制前置系统指令，杜绝大模型跳过工具调用
+                        // 【防幻觉与防空谈拦截】：若用户提问涉及实时库存或选品推荐对比，强制前置系统指令，杜绝大模型跳过工具调用
                         String finalUserPrompt = actualAgentPrompt;
                         if (!hasImage && QueryIntentClassifier.isStockQuery(userPrompt)) {
                             finalUserPrompt = "【系统指令：用户正在查询实时库存。注意【商品知识库参考】中不包含库存，你必须立即调用 `searchProducts` 工具向微服务查库！若微服务被 Sentinel 限流或报错，请如实告知用户当前限流中，绝对严禁捏造库存数字！】\n" + actualAgentPrompt;
+                        } else if (!hasImage && QueryIntentClassifier.isRecommendOrCompare(userPrompt)) {
+                            finalUserPrompt = "【系统指引：用户正在咨询商品选购、对比、推荐或平替。你必须优先调用 `searchProducts` 工具检索商城在售商品（如按品牌或品类词检索），基于商城真实上架的商品及价格给出专业建议；若用户提问与商城购物完全无关（如闲聊、写代码），则无需调用工具。】\n" + actualAgentPrompt;
                         }
 
                         // 【核心修复 P1-1】：显式按 [SystemMessage, history..., UserMessage] 顺序组装 Prompt
@@ -697,7 +704,7 @@ public class AiShoppingService {
             log.info("==================================================================");
 
             Map<String, Object> requestBody = Map.of(
-                    "model", (chatModel != null && !chatModel.isBlank()) ? chatModel : "qwen3.7-flash",
+                    "model", (chatModel != null && !chatModel.isBlank()) ? chatModel : "qwen3.8-flash",
                     "enable_thinking", false,
                     "response_format", Map.of("type", "json_object"),
                     "messages", List.of(

@@ -52,7 +52,7 @@ spring:
         base-url: ${CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
         api-key: ${DASHSCOPE_API_KEY}
         options:
-          model: ${CHAT_MODEL:qwen3.7-flash}
+          model: ${CHAT_MODEL:qwen3.8-flash}
           temperature: 0.7
           max-tokens: 2048
       embedding:

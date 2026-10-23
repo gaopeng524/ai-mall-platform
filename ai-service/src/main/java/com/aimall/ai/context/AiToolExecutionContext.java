@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,6 +44,9 @@ public class AiToolExecutionContext {
         /** 单次提问（单轮 Turn）内商品服务是否已触发 Sentinel 429 限流（该标记随本轮回答结束 clear() 自动销毁，不影响下一句提问） */
         @Builder.Default
         private volatile boolean productServiceRateLimited = false;
+        /** 记录当前会话实际执行过的工具名称列表（按顺序记录，供自动化评测与日志追踪） */
+        @Builder.Default
+        private final List<String> executedTools = new java.util.concurrent.CopyOnWriteArrayList<>();
     }
 
     /** 线程本地上下文绑定（支持父子线程继承） */
@@ -198,6 +202,16 @@ public class AiToolExecutionContext {
 
         // 核心风控熔断：杜绝大模型陷入死循环（如由于猜错ID，连续不断调用 getProductDetail(54), (55), (56)...）
         if (targetCtx != null) {
+            targetCtx.getExecutedTools().add(toolName);
+            if (targetCtx.getEventConsumer() != null) {
+                try {
+                    Map<String, Object> toolPayload = Map.of(
+                            "event", "tool_call",
+                            "toolName", toolName
+                    );
+                    targetCtx.getEventConsumer().accept(AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(toolPayload));
+                } catch (Exception ignored) {}
+            }
             int execCount = targetCtx.getToolExecutionCount().incrementAndGet();
             int missCount = targetCtx.getConsecutiveNotFoundCount().get();
             if (execCount > 5 || missCount >= 3) {
@@ -375,6 +389,14 @@ public class AiToolExecutionContext {
     public static List<Map<String, Object>> getLastEmittedProducts() {
         SessionContext ctx = getActiveContext();
         return ctx != null ? ctx.getLastEmittedProducts() : null;
+    }
+
+    /**
+     * 获取当前会话已经执行过的工具名称列表（供自动化评测与链路断言）
+     */
+    public static List<String> getExecutedTools() {
+        SessionContext ctx = getActiveContext();
+        return ctx != null ? new ArrayList<>(ctx.getExecutedTools()) : Collections.emptyList();
     }
 
     /**

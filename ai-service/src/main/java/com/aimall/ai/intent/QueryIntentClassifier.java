@@ -38,6 +38,11 @@ public final class QueryIntentClassifier {
                     + "|有没有货|还有没有|还有吗"
     );
 
+    /** 商品咨询、推荐、对比或选购平替类问句 */
+    private static final Pattern RECOMMEND_OR_COMPARE = Pattern.compile(
+            "推荐|对比|比较|平替|对标|买哪个|哪款好|性价比|好用吗|怎么选|值得买吗|有没有.*(推荐|平替|好物)"
+    );
+
     /**
      * 是否为交易类 / 个人数据类问句（这类问句禁止读写问句缓存）
      */
@@ -56,6 +61,16 @@ public final class QueryIntentClassifier {
             return false;
         }
         return STOCK.matcher(query).find();
+    }
+
+    /**
+     * 是否为商品推荐、对比或平替咨询类问句
+     */
+    public static boolean isRecommendOrCompare(String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        return RECOMMEND_OR_COMPARE.matcher(query).find();
     }
 
     /**
