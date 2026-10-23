@@ -57,4 +57,36 @@ public final class QueryIntentClassifier {
         }
         return STOCK.matcher(query).find();
     }
+
+    /**
+     * 智能降级泛化关键词：剥离口语意图词（如“库存/还有多少/多少钱”）、电商特色品牌核心对齐、以及常见泛品类后缀，
+     * 用于当下游微服务长词匹配落空时自动进行二次容错召回
+     */
+    public static String relaxKeyword(String kw) {
+        if (kw == null || kw.isBlank()) {
+            return "";
+        }
+        String relaxed = kw.trim();
+        // 1. 剥离口语意图词
+        relaxed = relaxed.replaceAll("(库存|还有多少|多少钱|价格|有货吗|有货|有吗|推荐|正品|买)", "").trim();
+        // 2. 电商特色品牌/品类关键对齐
+        if (relaxed.contains("赤兔")) {
+            return "李宁赤兔";
+        }
+        if (relaxed.contains("苹果") || relaxed.toLowerCase().contains("iphone")) {
+            return "苹果";
+        }
+        if (relaxed.contains("小米")) {
+            return "小米";
+        }
+        if (relaxed.contains("漫步者")) {
+            return "漫步者";
+        }
+        if (relaxed.contains("华为") || relaxed.toLowerCase().contains("mate")) {
+            return "华为";
+        }
+        // 3. 通用剥离泛品类后缀
+        relaxed = relaxed.replaceAll("(跑步鞋|跑鞋|板鞋|运动鞋|手机|耳机|羽绒服|鼠标|键盘|咖啡机|双肩包)$", "").trim();
+        return relaxed.isBlank() ? kw : relaxed;
+    }
 }

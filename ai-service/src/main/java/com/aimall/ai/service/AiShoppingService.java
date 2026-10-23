@@ -375,7 +375,7 @@ public class AiShoppingService {
                     List<Message> history = loadSessionHistory(effectiveSessionId);
 
                     // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话且非交易/库存问句时启用）
-                    boolean isCandidateForCache = !hasImage && history.isEmpty() && !isTransactionalQuery(userPrompt);
+                    boolean isCandidateForCache = !hasImage && history.isEmpty() && !QueryIntentClassifier.isTransactional(userPrompt);
                     SemanticCacheService.Lookup cacheLookup = null;
                     if (isCandidateForCache) {
                         try {
@@ -470,7 +470,7 @@ public class AiShoppingService {
                     try {
                         // 【防幻觉强行拦截】：若用户提问涉及实时库存或有货无货，强制前置系统指令，杜绝大模型跳过工具调用
                         String finalUserPrompt = actualAgentPrompt;
-                        if (!hasImage && isStockOrInventoryQuery(userPrompt)) {
+                        if (!hasImage && QueryIntentClassifier.isStockQuery(userPrompt)) {
                             finalUserPrompt = "【系统指令：用户正在查询实时库存。注意【商品知识库参考】中不包含库存，你必须立即调用 `searchProducts` 工具向微服务查库！若微服务被 Sentinel 限流或报错，请如实告知用户当前限流中，绝对严禁捏造库存数字！】\n" + actualAgentPrompt;
                         }
 
@@ -837,22 +837,6 @@ public class AiShoppingService {
             int end = Math.min(i + chunkSize, text.length());
             sink.next(AiToolExecutionContext.formatChunkEvent(text.substring(i, end)));
         }
-    }
-
-    /**
-     * 判断是否为交易类、个性化私有操作或强时效动态数据（严禁读取或写入静态语义缓存）
-     * 委托给 {@link QueryIntentClassifier#isTransactional(String)}，采用词组级匹配，避免“车厘子”等单字误判。
-     */
-    private boolean isTransactionalQuery(String query) {
-        return QueryIntentClassifier.isTransactional(query);
-    }
-
-    /**
-     * 判断是否为实时库存或在售现货状态询问
-     * 委托给 {@link QueryIntentClassifier#isStockQuery(String)}。
-     */
-    private boolean isStockOrInventoryQuery(String query) {
-        return QueryIntentClassifier.isStockQuery(query);
     }
 
     /**

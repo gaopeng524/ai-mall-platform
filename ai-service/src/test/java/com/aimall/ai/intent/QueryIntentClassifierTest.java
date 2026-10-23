@@ -1,10 +1,11 @@
 package com.aimall.ai.intent;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * 问句意图分类器单元测试：验证词组级规则，防止“车厘子/值得买吗/推荐几双跑鞋”等单字误判
@@ -53,5 +54,25 @@ class QueryIntentClassifierTest {
     })
     void shouldIdentifyStockQueries(String query) {
         assertTrue(QueryIntentClassifier.isStockQuery(query), "应识别为实时库存问句: " + query);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "李宁赤兔6跑鞋还有多少库存, 李宁赤兔",
+            "推荐漫步者降噪耳机, 漫步者",
+            "iPhone 15 Pro价格多少, 苹果",
+            "小米14有货吗, 小米",
+            "华为Mate60还有多少, 华为",
+            "亚瑟士跑步鞋, 亚瑟士",
+            "罗技GPW无线鼠标, 罗技GPW无线"
+    })
+    void shouldRelaxKeywordCorrectly(String raw, String expected) {
+        assertEquals(expected, QueryIntentClassifier.relaxKeyword(raw));
+    }
+
+    @Test
+    void shouldHandleEmptyAndBlankRelaxKeyword() {
+        assertEquals("", QueryIntentClassifier.relaxKeyword(null));
+        assertEquals("", QueryIntentClassifier.relaxKeyword("   "));
     }
 }
