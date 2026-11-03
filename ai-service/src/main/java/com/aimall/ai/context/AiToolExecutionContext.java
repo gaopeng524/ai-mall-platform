@@ -205,10 +205,10 @@ public class AiToolExecutionContext {
             targetCtx.getExecutedTools().add(toolName);
             if (targetCtx.getEventConsumer() != null) {
                 try {
-                    Map<String, Object> toolPayload = Map.of(
-                            "event", "tool_call",
-                            "toolName", toolName
-                    );
+                    Map<String, Object> toolPayload = new java.util.LinkedHashMap<>();
+                    toolPayload.put("event", "tool_call");
+                    toolPayload.put("toolName", toolName);
+                    toolPayload.put("args", toolRequest != null ? OBJECT_MAPPER.valueToTree(toolRequest) : Map.of());
                     targetCtx.getEventConsumer().accept(AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(toolPayload));
                 } catch (Exception ignored) {}
             }
@@ -223,8 +223,20 @@ public class AiToolExecutionContext {
                         "已自动终止循环调用，正在为您呈现最佳导购回复",
                         "failed"
                 );
-                return (T) ("【系统安全熔断】单轮对话工具调用已达安全上限（检测到连续多次检索不存在的编号或反复调用工具）。"
-                        + "严禁继续调用任何工具！请立即基于已有知识直接给用户友好的文字回复，或建议用户直接提供商品名称进行搜索！");
+                String cbMsg = "【系统安全熔断】单轮对话工具调用已达安全上限（检测到连续多次检索不存在的编号或反复调用工具）。"
+                        + "严禁继续调用任何工具！请立即基于已有知识直接给用户友好的文字回复，或建议用户直接提供商品名称进行搜索！";
+                if (targetCtx.getEventConsumer() != null) {
+                    try {
+                        Map<String, Object> resPayload = Map.of(
+                                "event", "tool_result",
+                                "toolName", toolName,
+                                "result", cbMsg,
+                                "costMs", 0L
+                        );
+                        targetCtx.getEventConsumer().accept(AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(resPayload));
+                    } catch (Exception ignored) {}
+                }
+                return (T) cbMsg;
             }
         }
 
@@ -268,6 +280,17 @@ public class AiToolExecutionContext {
             }
 
             long cost = System.currentTimeMillis() - start;
+            if (targetCtx != null && targetCtx.getEventConsumer() != null) {
+                try {
+                    Map<String, Object> resPayload = new java.util.LinkedHashMap<>();
+                    resPayload.put("event", "tool_result");
+                    resPayload.put("toolName", toolName);
+                    resPayload.put("args", toolRequest != null ? OBJECT_MAPPER.valueToTree(toolRequest) : Map.of());
+                    resPayload.put("result", result != null ? String.valueOf(result) : "");
+                    resPayload.put("costMs", cost);
+                    targetCtx.getEventConsumer().accept(AI_EVENT_PREFIX + OBJECT_MAPPER.writeValueAsString(resPayload));
+                } catch (Exception ignored) {}
+            }
             log.info("<<<<<<<<<<<<<<<<<<<< [AI 工具调用·执行完成] <<<<<<<<<<<<<<<<<<<<");
             log.info("[工具名称] {}, [耗时] {} ms", toolName, cost);
             log.info("[输出结果]\n{}", result);

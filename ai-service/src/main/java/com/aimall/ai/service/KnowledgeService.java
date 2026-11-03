@@ -144,10 +144,11 @@ public class KnowledgeService implements ApplicationRunner {
                 deterministicUuid("kb_matrix_runningshoes"),
                 """
                 【专业跑鞋选购与平替知识】
-                - 旗舰标杆：Nike Air Zoom Pegasus 40（售价 ¥799），核心科技为 React 泡棉中底 + 前后掌双 Zoom Air 气垫，适合日常慢跑训练，支撑稳定，重量约 285g。
-                - 顶级高性价比平替：[商品ID: 3] 李宁赤兔6 Pro 专业竞速跑步鞋（售价 ¥499，限时秒杀 ¥99）。
+                - 旗舰标杆：Nike Air Zoom Pegasus 40（定位数百元中高端专业档位），核心科技为 React 泡棉中底 + 前后掌双 Zoom Air 气垫，适合日常慢跑训练，支撑稳定，重量约 285g。
+                - 顶级高性价比平替：[商品ID: 3] 李宁赤兔6 Pro 专业竞速跑步鞋（定位数百元中端进阶/秒杀专区高性价比款）。
                 - 核心平替对比与优势：李宁赤兔6 Pro 采用全掌李宁䨻（BOOM）科技轻弹中底，能量回馈高达 80%，重量仅约 210g（比 Nike 轻 75g！），前掌滚动感与跑道提速极佳。千元内专业竞速与日常拉练首选平替。
-                - 百元休闲板鞋对标：Nike Air Force 1 空军一号（¥749）与回力复古经典低帮小白鞋（¥79），回力橡胶硫化底耐磨防滑，适合学生与日常百元内板鞋极致平替。
+                - 百元休闲板鞋对标：Nike Air Force 1 空军一号（定位数百元中端潮流档位）与回力复古经典低帮小白鞋（定位百元内入门首选/高性价比平替），回力橡胶硫化底耐磨防滑，适合学生与日常百元内板鞋极致平替。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体在售价格、优惠及库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_matrix_runningshoes", "category", "运动鞋", "type", "comparison_matrix", "tags", "跑鞋,李宁䨻,Nike,平替")
         ));
@@ -157,9 +158,10 @@ public class KnowledgeService implements ApplicationRunner {
                 deterministicUuid("kb_matrix_phones"),
                 """
                 【智能手机选购与平替知识】
-                - 旗舰影像标杆：苹果 iPhone 15 Pro（售价 ¥7999），搭载 A17 Pro 3nm 芯片与航空钛金属机身，支持硬件级光追与 ProRes 视频。
-                - 小尺寸全能影像平替：小米 14（售价 ¥3999）。搭载高通骁龙 8 Gen 3 处理器，配备新一代徕卡 Summilux 顶级镜头与光影猎人 900 传感器，支持 1.5K 超窄边直屏与 90W 秒充，价格仅为 iPhone 的一半，拍照与续航综合体验极强。
-                - 性能黑马平替：红米 Redmi K70（售价 ¥2399）。搭载第二代骁龙 8 处理器、2K 顶级中国屏与 120W 快充，5000mAh 大电池，是对标华为 Mate 60 Pro（¥6999）等高价机型在日常游戏与长续航场景下的两千元档极致性能平替。
+                - 旗舰影像标杆：苹果 iPhone 15 Pro（定位高端顶级旗舰档位），搭载 A17 Pro 3nm 芯片与航空钛金属机身，支持硬件级光追与 ProRes 视频。
+                - 小尺寸全能影像平替：小米 14（定位千元级轻奢/高端旗舰档位）。搭载高通骁龙 8 Gen 3 处理器，配备新一代徕卡 Summilux 顶级镜头与光影猎人 900 传感器，支持 1.5K 超窄边直屏与 90W 秒充，相较顶级旗舰具备极高质价比，拍照与续航综合体验极强。
+                - 性能黑马平替：红米 Redmi K70（定位两千元档性能中端旗舰）。搭载第二代骁龙 8 处理器、2K 顶级中国屏与 120W 快充，5000mAh 大电池，是对标高端顶级旗舰等高价机型在日常游戏与长续航场景下的两千元档极致性能平替。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体在售价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_matrix_phones", "category", "手机", "type", "comparison_matrix", "tags", "小米14,iPhone,红米K70,骁龙8Gen3")
         ));
@@ -169,10 +171,11 @@ public class KnowledgeService implements ApplicationRunner {
                 deterministicUuid("kb_matrix_earphones"),
                 """
                 【降噪耳机选购与平替知识】
-                - 头戴旗舰标杆：索尼 WH-1000XM5（售价 ¥2999），双芯驱动，8 麦克风主动降噪天花板，LDAC 高解析度传输。
-                - 百元头戴降噪神级平替：漫步者 (EDIFIER) W820NB 双金标头戴式无线降噪耳机（售价 ¥299）。
-                - 核心平替对比与优势：漫步者拥有 Hi-Res 与 Hi-Res WIRELESS 双金标官方认证，具备 -43dB 深度混合主动降噪，零压感专利耳套久戴不压头，续航长达 50 小时（超索尼 20 小时！），售价仅为索尼的十分之一。
-                - 入耳式降噪平替：苹果 AirPods Pro 2（¥1899，H2 芯片）对标红米 Redmi Buds 5 Pro（¥399）。红米具备 52dB 超宽频深度降噪，圈瓷同轴双单元，LHDC 5.0 高清音频，是两千元内无线降噪耳机的公认卷王平替。
+                - 头戴旗舰标杆：索尼 WH-1000XM5（定位千元级高端专业旗舰档位），双芯驱动，8 麦克风主动降噪天花板，LDAC 高解析度传输。
+                - 百元头戴降噪神级平替：漫步者 (EDIFIER) W820NB 双金标头戴式无线降噪耳机（定位数百元高性价比平替/品质优选）。
+                - 核心平替对比与优势：漫步者拥有 Hi-Res 与 Hi-Res WIRELESS 双金标官方认证，具备 -43dB 深度混合主动降噪，零压感专利耳套久戴不压头，续航长达 50 小时（超索尼 20 小时！），质价比极其出众。
+                - 入耳式降噪平替：苹果 AirPods Pro 2（千元级轻奢旗舰，H2 芯片）对标红米 Redmi Buds 5 Pro（数百元高性价比平替）。红米具备 52dB 超宽频深度降噪，圈瓷同轴双单元，LHDC 5.0 高清音频，是无线降噪耳机的公认卷王平替。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体在售价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_matrix_earphones", "category", "耳机", "type", "comparison_matrix", "tags", "降噪耳机,漫步者W820NB,索尼XM5,双金标")
         ));
@@ -182,9 +185,10 @@ public class KnowledgeService implements ApplicationRunner {
                 deterministicUuid("kb_matrix_peripherals"),
                 """
                 【电竞鼠标与机械键盘选购与平替知识】
-                - 旗舰电竞鼠标：罗技 GPW 二代狗屁王（售价 ¥1099），60g 超轻量化设计，HERO 25K 传感器。
-                - 顶级百元平替：雷柏 VT9 PRO 双模无线鼠标（售价 ¥199）。同样搭载原相顶级 PAW3395 传感器，68g 轻量化，V+ 无线游戏技术低至 1ms 延迟，支持 4K 回报率升级，价格仅为罗技的两成。
-                - 客制化机械键盘平替：Keychron Q1 Pro 全铝客制化键盘（¥1188）对标达尔优 A98 三模热插拔（¥399）。达尔优 A98 采用 Gasket 结构消音垫，搭载天空轴 V3，手感软弹音纯，RGB 灯效与三模连接一应俱全。
+                - 旗舰电竞鼠标：罗技 GPW 二代狗屁王（千元级专业电竞旗舰），60g 超轻量化设计，HERO 25K 传感器。
+                - 顶级百元平替：雷柏 VT9 PRO 双模无线鼠标（定位百元高性价比平替/入门首选）。同样搭载原相顶级 PAW3395 传感器，68g 轻量化，V+ 无线游戏技术低至 1ms 延迟，支持 4K 回报率升级，价格门槛远低于高端旗舰。
+                - 客制化机械键盘平替：Keychron Q1 Pro 全铝客制化键盘（千元级客制化旗舰）对标达尔优 A98 三模热插拔（数百元中端进阶平替）。达尔优 A98 采用 Gasket 结构消音垫，搭载天空轴 V3，手感软弹音纯，RGB 灯效与三模连接一应俱全。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体在售价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_matrix_peripherals", "category", "数码外设", "type", "comparison_matrix", "tags", "雷柏VT9,PAW3395,达尔优A98,GPW2")
         ));
@@ -194,9 +198,10 @@ public class KnowledgeService implements ApplicationRunner {
                 deterministicUuid("kb_matrix_outdoor"),
                 """
                 【户外硬壳与极寒羽绒选购与平替知识】
-                - 冬季羽绒标杆：北面 (The North Face) 1996 经典羽绒服（售价 ¥2998），美版 700 蓬松度鹅绒。
-                - 极寒高性价比平替：波司登极寒大朵白鹅绒服（售价 ¥1299）。采用高品质 600+ 蓬松度大朵白鹅绒，含绒量 90%，高密防风暴外壳，抵御零下 30℃ 严寒，保暖与做工品质扎实。
-                - 户外冲锋衣平替：始祖鸟 Beta AR 顶级硬壳（售价 ¥6000）对标拓路者雪峰三合一冲锋衣（售价 ¥499）。拓路者具备暴雨级防水防风面料，可拆卸双面加厚摇粒绒内胆，一衣三穿，满足绝大多数徒步与日常通勤需求。
+                - 冬季羽绒标杆：北面 (The North Face) 1996 经典羽绒服（定位千元级轻奢/高端专业旗舰），美版 700 蓬松度鹅绒。
+                - 极寒高性价比平替：波司登极寒大朵白鹅绒服（定位千元级专业保暖/高性价比平替）。采用高品质 600+ 蓬松度大朵白鹅绒，含绒量 90%，高密防风暴外壳，抵御零下 30℃ 严寒，保暖与做工品质扎实。
+                - 户外冲锋衣平替：始祖鸟 Beta AR 顶级硬壳（定位高端顶级户外旗舰）对标拓路者雪峰三合一冲锋衣（数百元中端实用平替）。拓路者具备暴雨级防水防风面料，可拆卸双面加厚摇粒绒内胆，一衣三穿，满足绝大多数徒步与日常通勤需求。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体在售价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_matrix_outdoor", "category", "服装", "type", "comparison_matrix", "tags", "羽绒服,波司登,冲锋衣,始祖鸟平替")
         ));
@@ -207,9 +212,10 @@ public class KnowledgeService implements ApplicationRunner {
                 """
                 【AI 电商平台核心交易规则与售后保障】
                 1. 订单支付时效：所有商品下单后进入 PENDING 待支付状态，系统挂载 RocketMQ 延迟消息与 Redis 双通道超时保护，5 分钟未支付将自动关单并自动归还商品库存。
-                2. 秒杀与并发保障：高并发秒杀商品（如李宁赤兔6 Pro ¥99 秒杀）通过 Redis + Lua 脚本进行原子扣减，具备本地 Caffeine 缓存与 Sentinel 限流防护，杜绝超卖。
+                2. 秒杀与并发保障：高并发秒杀商品（如限时秒杀特惠商品）通过 Redis + Lua 脚本进行原子扣减，具备本地 Caffeine 缓存与 Sentinel 限流防护，杜绝超卖。实时秒杀价与库存以工具查库为准。
                 3. 取消订单：未支付订单支持随时自主取消（或让 AI 导购协助取消），取消后库存秒级回滚。
                 4. 购物车与结算：支持多商品勾选一键合并结算下单，生成主单号。
+                - 价格与库存说明：【知识库不含实时售价与库存！查询具体价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
                 """,
                 Map.of("docKey", "kb_rules_mall", "category", "平台规则", "type", "faq", "tags", "超时关单,秒杀,库存回滚,购物车")
         ));
@@ -220,6 +226,23 @@ public class KnowledgeService implements ApplicationRunner {
             throw new BusinessException(500, "初始化知识库失败，向量写入条数为 0，请检查 pgvector 连通性与模型配置");
         }
         return added;
+    }
+
+    /**
+     * 计算语义价格档位（用于解耦 RAG 向量检索与实时数值售价，建立品类定位语义）
+     */
+    private String calculatePriceTier(Object priceObj) {
+        if (priceObj == null) return "平价亲民";
+        double price = 0.0;
+        try {
+            price = Double.parseDouble(String.valueOf(priceObj));
+        } catch (Exception e) {
+            return "平价亲民";
+        }
+        if (price < 200) return "百元高性价比/入门首选";
+        if (price < 1000) return "数百元中端进阶/品质优选";
+        if (price < 3000) return "千元级轻奢/专业旗舰";
+        return "高端顶级旗舰";
     }
 
     /**
@@ -244,20 +267,23 @@ public class KnowledgeService implements ApplicationRunner {
                 Object price = p.getOrDefault("price", 0);
                 String desc = String.valueOf(p.getOrDefault("description", ""));
 
+                String priceTier = calculatePriceTier(price);
                 String content = String.format("""
-                        【商城在售商品知识（静态参考，不含实时库存）】
+                        【商城在售商品知识（静态语义参考，不含实时价格与库存）】
                         - 商品ID：%s
                         - 商品名称：%s
                         - 所属品类：%s
-                        - 官方售价：¥%s
+                        - 定位档位：%s
                         - 核心卖点与规格描述：%s
-                        - 实时库存：【知识库不含库存，查库存必须调用 searchProducts 工具查库，绝对严禁编造】
-                        """, id, name, category, price, desc);
+                        - 价格与库存说明：【知识库不含实时售价与库存！查询具体价格与库存必须调用 searchProducts 或 getProductDetail 工具向微服务查库，绝对严禁编造或猜想价格】
+                        """, id, name, category, priceTier, desc);
 
                 Map<String, Object> metadata = new HashMap<>();
                 metadata.put("productId", id);
                 metadata.put("name", name);
                 metadata.put("category", category);
+                metadata.put("price", price);
+                metadata.put("priceTier", priceTier);
                 metadata.put("type", "live_product");
 
                 // 核心修复 P0-4：绑定确定性唯一 UUID，ON CONFLICT (id) DO UPDATE 保证幂等防重复

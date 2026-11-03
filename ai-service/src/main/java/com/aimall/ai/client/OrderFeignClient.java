@@ -42,4 +42,7 @@ public interface OrderFeignClient {
 
     @PostMapping("/cart/checkout")
     Result<Map<String, Object>> checkoutCart(@RequestParam("userId") Long userId);
+
+    @PostMapping("/cart/clear")
+    Result<Boolean> clearCart(@RequestParam("userId") Long userId);
 }

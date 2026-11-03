@@ -42,4 +42,9 @@ public class OrderFeignClientFallback implements OrderFeignClient {
     public Result<Map<String, Object>> checkoutCart(Long userId) {
         return Result.fail("购物车服务暂时不可用");
     }
+
+    @Override
+    public Result<Boolean> clearCart(Long userId) {
+        return Result.fail("购物车服务暂时不可用");
+    }
 }

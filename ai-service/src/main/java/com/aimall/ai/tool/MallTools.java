@@ -122,7 +122,7 @@ public class MallTools {
     }
 
     @Bean
-    @Description("【首选核心查询工具】根据关键词、商品名称、品牌（如“李宁赤兔”、“iPhone 15”、“跑鞋”等）和预算搜索商品列表，返回商品ID、名称、分类、价格、实时库存与核心卖点。凡是用户按名称找商品、询问商品库存、查询价格、或者未获知确切数字ID时，必须百分之百调用此工具！")
+    @Description("【首选核心查询工具】根据关键词、商品名称、品牌或品类和预算搜索商品列表，返回商品ID、名称、分类、价格、实时库存与核心卖点。凡是用户按名称找商品、询问商品库存、查询价格、或者未获知确切数字ID时，必须调用此工具！")
     public BiFunction<SearchRequest, ToolContext, String> searchProducts() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("searchProducts", toolContext, request, () -> {
             String kw = request.keyword() != null ? request.keyword() : "";
@@ -197,18 +197,20 @@ public class MallTools {
             log.info("[AI Tool] getProductDetail: productId={}", request.productId());
             try {
                 var result = productFeignClient.getById(request.productId());
-                if (result != null && result.getCode() != 200) {
+                if (result != null && (result.getCode() == 429 || (result.getMessage() != null && (result.getMessage().contains("限流") || result.getMessage().contains("降级") || result.getMessage().contains("繁忙"))))) {
                     AiToolExecutionContext.markProductServiceRateLimited();
                     String errorMsg = result.getMessage() != null ? result.getMessage() : "商品详情服务已被限流或不可用";
                     log.warn("[AI Tool] getProductDetail 触发 Sentinel 限流/降级: code={}, msg={}", result.getCode(), errorMsg);
                     AiToolExecutionContext.emitToolStep("product_query", "商品详情服务已被 Sentinel 限流拦截 (HTTP " + result.getCode() + ")", errorMsg, "failed");
                     return "【服务受限】商品详情微服务已被 Sentinel 限流保护（状态码: " + result.getCode() + "，" + errorMsg + "）。无法查询该商品的详情与实时库存。请如实告知用户当前限流中，无法查询实时库存，绝对严禁凭空捏造！";
                 }
-                if (result == null || result.getData() == null) {
+                if (result == null || result.getCode() == 2001 || result.getData() == null || (result.getMessage() != null && result.getMessage().contains("不存在"))) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品详情未找到", detailDesc, "failed");
-                    return String.format("【调用错误拦截】商品ID %d 在商城中不存在！"
-                            + "你当前未获取该商品的真实数字ID，绝对严禁猜测或递增ID（如连续试探 54, 55, 56...）！"
-                            + "请立即改用 searchProducts(keyword=\"商品名称\") 搜索该商品，searchProducts 会直接返回真实商品ID与实时库存！", request.productId());
+                    return "未找到 ID 为 " + request.productId() + " 的商品（该商品在系统中不存在或已下架），请如实告知用户该商品不存在，切勿编造库存或价格。";
+                }
+                if (result.getCode() != 200) {
+                    AiToolExecutionContext.emitToolStep("product_query", "查询商品详情失败", result.getMessage(), "failed");
+                    return "商品详情查询服务异常（状态码: " + result.getCode() + "，" + result.getMessage() + "），请稍后再试。";
                 }
                 Map<String, Object> product = result.getData();
                 AiToolExecutionContext.emitToolStep("product_query",
@@ -547,7 +549,6 @@ public class MallTools {
             }
         });
     }
-
     @Bean
     @Description("将用户购物车中已勾选的商品一键合并结算下单，生成订单并进入收银台。若用户尚未二次确认，生成待确认结算卡片（confirmed=false）；若已明确二次确认，执行真正结算（confirmed=true）。")
     public BiFunction<CheckoutCartRequest, ToolContext, String> checkoutCart() {
