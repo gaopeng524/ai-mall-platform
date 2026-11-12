@@ -14,18 +14,20 @@ import com.aimall.common.trace.TraceContext;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Component;
 
+import com.aimall.order.stock.StockDeductTaskRepository;
+import org.springframework.transaction.support.TransactionTemplate;
+
 import java.time.LocalDateTime;
 
 /**
  * RocketMQ 异步削峰消费者
- * 
- * 核心升级（方向一与方向二双重落地）：
- * 1. 消费幂等校验：通过数据库查询与唯一索引拦截网络重试抖动；
+ *
+ * 1. 消费幂等：orders.order_no 唯一索引，MQ 重复投递时整个本地事务回滚，直接视为已处理；
  * 2. 状态初始落库：订单以 PENDING（待支付）状态落库；
- * 3. 【方向二：批量合并扣减】：将每笔扣减推入 BatchStockDeductBuffer 内存缓冲池，
- *    由后台定时器聚合批量调用 MySQL UPDATE，彻底消灭单行排他锁争用瓶颈；
- * 4. 【方向一：延迟关单消息投递】：订单落库后向 RocketMQ 投递一条延迟消息（默认 10 秒），
- *    到期自动巡检：若未付款则 CAS 自动取消并回滚 MySQL 与 Redis 库存！
+ * 3. 【扣库任务表】在<b>同一个本地事务</b>里写订单和 stock_deduct_task，
+ *    由 {@link com.aimall.order.stock.StockDeductWorker} 批量领取、按商品合并、按批次号幂等地扣 MySQL 库存。
+ *    取代原来的内存聚合 BatchStockDeductBuffer：进程崩溃不再丢扣减（见 docs/STOCK_DEDUCT_TASK_DESIGN.md）；
+ * 4. 延迟关单消息：事务提交后投递，到期若未付款则 CAS 取消并回滚 MySQL 与 Redis 库存。
  */
 @Slf4j
 @Component
@@ -40,7 +42,8 @@ public class OrderConsumer implements RocketMQListener<OrderCreateMessage> {
     public static final String CANCEL_TOPIC = "seckill-order-cancel-topic";
 
     private final OrderMapper orderMapper;
-    private final BatchStockDeductBuffer batchStockDeductBuffer;
+    private final StockDeductTaskRepository stockDeductTaskRepository;
+    private final TransactionTemplate transactionTemplate;
     private final RocketMQTemplate rocketMQTemplate;
 
     /**
@@ -54,7 +57,7 @@ public class OrderConsumer implements RocketMQListener<OrderCreateMessage> {
     public void onMessage(OrderCreateMessage message) {
         TraceContext.initOrGetTraceId(message.getTraceId());
         try {
-            // 1. 消费端幂等校验（防止网络抖动导致 MQ 重试重复消费）
+            // 1. 快速路径幂等校验（大部分重复投递在这里就被拦下，不必开事务）
             Long exists = orderMapper.selectCount(
                     new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, message.getOrderNo())
             );
@@ -63,37 +66,41 @@ public class OrderConsumer implements RocketMQListener<OrderCreateMessage> {
                 return;
             }
 
-            // 2. 构造订单实体并平滑落库 MySQL (初始状态: PENDING)
-            Order order = new Order();
-            order.setOrderNo(message.getOrderNo());
-            order.setUserId(message.getUserId());
-            order.setProductId(message.getProductId());
-            order.setProductName(message.getProductName());
-            order.setPrice(message.getPrice());
-            order.setQuantity(message.getQuantity());
-            order.setTotalAmount(message.getTotalAmount());
-            order.setStatus("PENDING");
-            order.setCreatedAt(LocalDateTime.now());
-            order.setUpdatedAt(LocalDateTime.now());
-
+            // 2. 同一个本地事务：订单 + 扣库任务，要么都在，要么都不在
             try {
-                orderMapper.insert(order);
+                transactionTemplate.executeWithoutResult(status -> {
+                    orderMapper.insert(buildOrder(message));
+                    stockDeductTaskRepository.insert(message.getOrderNo(), message.getProductId(), message.getQuantity());
+                });
             } catch (DuplicateKeyException e) {
+                // 并发重复投递：另一条消息已经提交，本事务整体回滚
                 log.debug("[RocketMQ消费幂等] 订单号 {} 唯一索引已存在，忽略重复写入", message.getOrderNo());
                 return;
             }
 
-            // 3. 【方向二：批量合并扣减库存】推入内存缓冲池，避免 32 个消费者死抢 MySQL 同一行排他锁
-            batchStockDeductBuffer.accumulate(message.getProductId(), message.getQuantity());
-
-            // 4. 【方向一：投递超时关单延迟消息】注册延迟巡检任务
+            // 3. 事务提交后再注册延迟关单（避免关单消息先于订单可见）
             sendTimeoutCancelMessage(message);
 
-            log.info("[秒杀消费-步骤3/3] 订单已异步批量落库 MySQL: 订单号 = {}, 状态 = PENDING, 已挂载 5 分钟超时关单守护",
+            log.info("[秒杀消费-步骤3/3] 订单与扣库任务已同事务落库: 订单号 = {}, 状态 = PENDING, 已挂载超时关单守护",
                     message.getOrderNo());
         } finally {
             TraceContext.clear();
         }
+    }
+
+    private static Order buildOrder(OrderCreateMessage message) {
+        Order order = new Order();
+        order.setOrderNo(message.getOrderNo());
+        order.setUserId(message.getUserId());
+        order.setProductId(message.getProductId());
+        order.setProductName(message.getProductName());
+        order.setPrice(message.getPrice());
+        order.setQuantity(message.getQuantity());
+        order.setTotalAmount(message.getTotalAmount());
+        order.setStatus("PENDING");
+        order.setCreatedAt(LocalDateTime.now());
+        order.setUpdatedAt(LocalDateTime.now());
+        return order;
     }
 
     /**

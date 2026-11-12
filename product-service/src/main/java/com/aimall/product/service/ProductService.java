@@ -28,6 +28,7 @@ public class ProductService {
     private final ProductMapper productMapper;
     private final RedissonClient redissonClient;
     private final StringRedisTemplate redisTemplate;
+    private final com.aimall.common.stock.JdbcStockLedger stockLedger;
 
     private static final String STOCK_LOCK_PREFIX = "lock:product:stock:";
     private static final String PRODUCT_LOCK_PREFIX = "lock:product:detail:";
@@ -277,6 +278,25 @@ public class ProductService {
             initStockInRedis(productId);
         }
         return true;
+    }
+
+    /**
+     * 批量扣减 MySQL 库存（秒杀扣库任务表方案）。
+     * 去重记录与库存变更在同一个事务中，详见 {@link com.aimall.common.stock.JdbcStockLedger}。
+     */
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public com.aimall.common.stock.BatchStockDeductResult batchDeductStock(com.aimall.common.stock.BatchStockDeductRequest request) {
+        com.aimall.common.stock.BatchStockDeductResult result = stockLedger.apply(request);
+        for (var r : result.results()) {
+            if (com.aimall.common.stock.BatchStockDeductResult.APPLIED.equals(r.status()) && !r.replayed()) {
+                redisTemplate.delete(PRODUCT_CACHE_PREFIX + r.productId());
+            } else if (com.aimall.common.stock.BatchStockDeductResult.INSUFFICIENT.equals(r.status())) {
+                log.error("[批量扣库存] MySQL 库存不足，批次 {} 商品 {} 需扣 {} 件未扣，需人工对账",
+                        result.batchNo(), r.productId(), r.quantity());
+            }
+        }
+        log.info("[批量扣库存] 批次 {} 执行完成: {}", result.batchNo(), result.results());
+        return result;
     }
 
     /**

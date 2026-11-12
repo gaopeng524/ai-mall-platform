@@ -56,6 +56,17 @@ public class ProductController {
     /**
      * 内部 RPC 接口：RocketMQ 消费端异步落库扣减 MySQL 实际库存
      */
+    /**
+     * 秒杀扣库 worker 批量扣减 MySQL 库存（按批次号幂等：同一批次重复调用只扣一次）
+     */
+    @PostMapping("/batch-deduct-stock")
+    public Result<com.aimall.common.stock.BatchStockDeductResult> batchDeductStock(
+            @RequestBody com.aimall.common.stock.BatchStockDeductRequest body,
+            HttpServletRequest request) {
+        InternalRpcSecurity.requireInternalRpc(request);
+        return Result.success(productService.batchDeductStock(body));
+    }
+
     @PostMapping("/sync-deduct-stock")
     public Result<Boolean> syncDeductStock(
             @RequestParam("productId") Long productId,

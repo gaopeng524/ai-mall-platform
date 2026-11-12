@@ -87,6 +87,19 @@
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
         </dependency>
+    
+        <!-- 故障注入集成测试：有 Docker 时用 Testcontainers 启动 MySQL / Redis / RocketMQ；
+             没有 Docker 时可通过 TEST_MYSQL_URL / TEST_REDIS_HOST / TEST_ROCKETMQ_NAMESRV 连接现成服务 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

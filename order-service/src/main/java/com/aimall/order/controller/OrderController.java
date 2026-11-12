@@ -73,9 +73,13 @@ public class OrderController {
             @RequestParam("productId") Long productId,
             @RequestParam(value = "quantity", required = false, defaultValue = "1") Integer quantity,
             @RequestParam(value = "userId", required = false) Long userId,
+            @RequestParam(value = "requestId", required = false) String requestId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             HttpServletRequest request) {
         Long effectiveUserId = resolveAuthorizedUserId(userId, request);
-        String orderNo = orderService.createOrder(productId, quantity, effectiveUserId, true);
+        // 客户端幂等键（可选）：响应丢失后用同一个键重试，返回同一个订单号
+        String key = idempotencyKey != null && !idempotencyKey.isBlank() ? idempotencyKey : requestId;
+        String orderNo = orderService.createSeckillOrder(productId, quantity, effectiveUserId, key);
         return Result.success("秒杀排队成功", orderNo);
     }
 

@@ -23,6 +23,11 @@ public interface ProductRemoteClient {
             @RequestParam("productId") Long productId,
             @RequestParam("quantity") Integer quantity);
 
+    /** 按批次号幂等的批量扣减 MySQL 库存（扣库任务表 worker 调用） */
+    @PostMapping("/product/batch-deduct-stock")
+    Result<com.aimall.common.stock.BatchStockDeductResult> batchDeductStock(
+            @org.springframework.web.bind.annotation.RequestBody com.aimall.common.stock.BatchStockDeductRequest request);
+
     @PostMapping("/product/sync-deduct-stock")
     Result<Boolean> syncDeductStock(
             @RequestParam("productId") Long productId,

@@ -37,6 +37,15 @@ public class ProductRemoteClientFallbackFactory implements FallbackFactory<Produ
             }
 
             @Override
+            public Result<com.aimall.common.stock.BatchStockDeductResult> batchDeductStock(
+                    com.aimall.common.stock.BatchStockDeductRequest request) {
+                // 结果未知（可能已在商品服务提交）：worker 会保持任务 PROCESSING，超时后用同一批次号重试
+                log.error("[Sentinel熔断保护] 调用商品服务 batchDeductStock 失败/熔断, batchNo: {}, 异常信息: {}",
+                        request != null ? request.batchNo() : null, cause.getMessage());
+                return Result.fail(5003, "批量扣库存服务熔断降级");
+            }
+
+            @Override
             public Result<Boolean> syncDeductStock(Long productId, Integer quantity) {
                 log.error("[Sentinel熔断保护] 调用商品服务 syncDeductStock 失败/触发熔断, productId: {}, 异常信息: {}",
                         productId, cause.getMessage());

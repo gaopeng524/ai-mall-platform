@@ -74,6 +74,13 @@ logging:
 seckill:
   order:
     cancel-delay-level: 9  # RocketMQ 延迟级别：1=1s, 2=5s, 3=10s, 4=30s, 5=1m, 6=2m, 7=3m, 8=4m, 9=5m, 14=10m (调整为真实电商标准 5 分钟)
+  # 扣库任务表方案（docs/STOCK_DEDUCT_TASK_DESIGN.md）
+  stock-task:
+    enabled: true
+    poll-interval-ms: 200          # worker 轮询间隔
+    batch-size: 500                # 每批最多领取任务数
+    processing-timeout-ms: 30000   # PROCESSING 超过该时长视为 worker 崩溃，整批重新领取
+    max-retries: 10                # 超过置 FAILED 并告警
 
 rocketmq:
   name-server: ${ROCKETMQ_NAMESRV:127.0.0.1:9876}

@@ -28,6 +28,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -51,6 +52,9 @@ public class OrderService {
 
     private static final String IDEMPOTENT_KEY_PREFIX = "idempotent:order:";
     private static final String STOCK_COUNT_PREFIX = "stock:count:";
+    /** 客户端请求幂等键：seckill:req:{userId}:{requestId} → orderNo */
+    private static final String SECKILL_REQUEST_PREFIX = "seckill:req:";
+    private static final Duration SECKILL_REQUEST_TTL = Duration.ofMinutes(10);
     private static final String SECKILL_ORDER_TOPIC = "seckill-order-topic";
     private static final String NORMAL_ORDER_TOPIC = "normal-order-topic";
     private static final AtomicInteger ORDER_SEQ = new AtomicInteger(1000);
@@ -107,7 +111,8 @@ public class OrderService {
      */
     public String createOrder(Long productId, Integer quantity, Long userId, Boolean isSeckill, String confirmToken) {
         if (Boolean.TRUE.equals(isSeckill)) {
-            return createSeckillOrder(productId, quantity, userId);
+            // 秒杀通道：confirmToken 作为请求幂等键
+            return createSeckillOrder(productId, quantity, userId, confirmToken);
         } else {
             return createNormalOrderTransactional(productId, quantity, userId, confirmToken);
         }
@@ -243,6 +248,27 @@ public class OrderService {
      * 4. RocketMQ 异步削峰投递 (asyncSend 1ms)：快速响应客户端，后台 Consumer 批量合并写入 MySQL。
      */
     public String createSeckillOrder(Long productId, Integer quantity, Long userId) {
+        return createSeckillOrder(productId, quantity, userId, null);
+    }
+
+    /**
+     * @param requestId 客户端生成的请求幂等键（Idempotency-Key，可空）。
+     *                  下单接口响应丢失后客户端用同一个 requestId 重试：直接返回第一次生成的订单号，
+     *                  不再预扣库存、不再投递消息，因此不会产生重复订单。
+     *                  不传时行为与原来完全一致（压测脚本无需改动）。
+     */
+    public String createSeckillOrder(Long productId, Integer quantity, Long userId, String requestId) {
+        // 0. 请求幂等：同一个 requestId 已经受理过，直接返回原订单号
+        String requestKey = (requestId == null || requestId.isBlank())
+                ? null : SECKILL_REQUEST_PREFIX + userId + ":" + requestId;
+        if (requestKey != null) {
+            String existingOrderNo = stringRedisTemplate.opsForValue().get(requestKey);
+            if (existingOrderNo != null) {
+                log.info("[秒杀请求幂等命中] 用户 {} 的请求 {} 已受理，返回原订单号 {}", userId, requestId, existingOrderNo);
+                return existingOrderNo;
+            }
+        }
+
         // 1. 获取商品基础信息（Caffeine 本地缓存）
         Map<String, Object> productData = getProductInfo(productId);
         String productName = String.valueOf(productData.get("name"));
@@ -280,6 +306,17 @@ public class OrderService {
         String orderNo = "ORD" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
                 + seq + String.format("%03d", ThreadLocalRandom.current().nextInt(1000));
 
+        // 3.1 登记请求幂等键（NX）：并发的同 requestId 重试只有一个能登记成功，其余归还预扣库存并返回同一订单号
+        if (requestKey != null) {
+            Boolean reserved = stringRedisTemplate.opsForValue().setIfAbsent(requestKey, orderNo, SECKILL_REQUEST_TTL);
+            if (!Boolean.TRUE.equals(reserved)) {
+                stringRedisTemplate.opsForValue().increment(stockKey, quantity);
+                String winner = stringRedisTemplate.opsForValue().get(requestKey);
+                log.info("[秒杀请求幂等命中] 并发重试，归还本次预扣，返回订单号 {}", winner);
+                return winner;
+            }
+        }
+
         log.info("[秒杀下单-步骤1/3] 收到秒杀请求: 订单号 = {}, 用户 = {}, 商品 = {}, 预扣前剩余库存 = {}",
                 orderNo, userId, productName, remainStock);
 
@@ -305,6 +342,7 @@ public class OrderService {
 
         if (!acquired) {
             stringRedisTemplate.opsForValue().increment(stockKey, quantity);
+            releaseRequestKey(requestKey, orderNo);
             throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(), "秒杀排队过于火爆，请稍后再试");
         }
 
@@ -321,15 +359,31 @@ public class OrderService {
                     inFlightSemaphore.release();
                     log.error("[异步削峰投递失败] 订单号: {}, 回滚 Redis 预扣库存", orderNo, throwable);
                     stringRedisTemplate.opsForValue().increment(stockKey, quantity);
+                    releaseRequestKey(requestKey, orderNo);
                 }
             });
         } catch (Exception e) {
             inFlightSemaphore.release();
             stringRedisTemplate.opsForValue().increment(stockKey, quantity);
+            releaseRequestKey(requestKey, orderNo);
             throw new BusinessException(ErrorCode.SYSTEM_ERROR.getCode(), "秒杀排队异常，请稍后重试");
         }
 
         return orderNo;
+    }
+
+    /** 下单失败时释放请求幂等键，允许客户端用同一个 requestId 重新下单（只删除自己登记的值） */
+    private void releaseRequestKey(String requestKey, String orderNo) {
+        if (requestKey == null) {
+            return;
+        }
+        try {
+            if (orderNo.equals(stringRedisTemplate.opsForValue().get(requestKey))) {
+                stringRedisTemplate.delete(requestKey);
+            }
+        } catch (Exception e) {
+            log.warn("[秒杀请求幂等] 释放请求键失败: {}", e.getMessage());
+        }
     }
 
     /**
