@@ -1,0 +1,28 @@
+# 测试专用配置：覆盖 src/main/resources/application.yml（不导入 Nacos 配置、不连注册中心）。
+# 数据源 / Redis / RocketMQ 地址由各集成测试通过 @DynamicPropertySource 注入。
+spring:
+  application:
+    name: order-service-it
+  cloud:
+    nacos:
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+      discovery:
+        enabled: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    root: WARN
+    com.aimall: INFO
+    RocketmqClient: ERROR

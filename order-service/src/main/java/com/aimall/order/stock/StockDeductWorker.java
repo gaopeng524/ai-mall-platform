@@ -95,7 +95,14 @@ public class StockDeductWorker {
     /** 领取并执行一个新批次 */
     public int processNewBatch() {
         String batchNo = newBatchNo();
-        List<StockDeductTask> tasks = transactionTemplate.execute(s -> repository.claimPending(batchSize, batchNo));
+        List<StockDeductTask> tasks;
+        try {
+            tasks = transactionTemplate.execute(s -> repository.claimPending(batchSize, batchNo));
+        } catch (org.springframework.dao.PessimisticLockingFailureException e) {
+            // 领取事务锁冲突（整体回滚，任务仍是 PENDING），下一轮再领
+            log.debug("[扣库任务] 领取批次锁冲突，下一轮重试: {}", e.getMessage());
+            return 0;
+        }
         if (tasks == null || tasks.isEmpty()) {
             return 0;
         }
@@ -197,8 +204,14 @@ public class StockDeductWorker {
                 action.run();
                 return;
             } catch (org.springframework.dao.PessimisticLockingFailureException e) {
-                if (attempt >= 3) {
+                if (attempt >= 5) {
                     log.warn("[扣库任务] 回写任务状态锁冲突，留待超时恢复: {}", e.getMessage());
+                    return;
+                }
+                try {
+                    Thread.sleep(20L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
                     return;
                 }
             }

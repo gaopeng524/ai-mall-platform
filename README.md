@@ -106,7 +106,8 @@ curl -N "http://localhost:8080/api/ai/chat/stream?sessionId=s001&message=我想�
 3. **AI Agent**：基于 Spring AI Function Calling 实现 LLM 自主调用业务 API
 4. **高并发秒杀体系（10,271.6 QPS 实测破万）**：
    - 彻底摒弃阻塞式分布式锁，采用 **Redis Super Lua** 原子完成防抖与预扣减；
-   - 基于 **RocketMQ 异步削峰** + **BatchStockDeductBuffer 内存聚合批量下刷**，消除数据库单行排他锁竞争；
+   - 基于 **RocketMQ 异步削峰** + **扣库任务表 `stock_deduct_task`**：订单与扣库任务同事务落库，worker 以 `FOR UPDATE SKIP LOCKED` 批量领取、按商品合并、按批次号幂等扣减 MySQL 库存，既消除单行排他锁竞争，又保证进程崩溃不丢扣减、重试不重复扣减（[设计说明](docs/STOCK_DEDUCT_TASK_DESIGN.md)）；
    - **RocketMQ 延迟关单巡检（10s）** + CAS 状态校验，实现超时自动关单与 Redis/MySQL 双向库存平账；
    - **非阻塞 asyncSend + Semaphore(5000) 信号量背压护栏**，在单机 Docker 环境下跑出 **10,271.6 QPS、48ms 均值、0 报错** 战绩（详见 [秒杀架构全景总结文档](SECKILL_OPTIMIZATION_SUMMARY.md)）。
+   - ⚠️ 上述压测数据基于旧的内存聚合版本，扣库任务表方案上线后需按 [复测指南](docs/SECKILL_RETEST_GUIDE.md) 重新压测并更新。
 5. **流式交互**：SSE 实时推送 AI 回答，用户体验接近主流 AI 产品

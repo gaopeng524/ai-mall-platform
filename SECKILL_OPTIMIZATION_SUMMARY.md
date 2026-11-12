@@ -1,5 +1,7 @@
 # AI 商城高并发秒杀架构演进与压测实战总结（全景复盘）
 
+> **2026-11 更新**：本文压测数据基于"内存聚合 BatchStockDeductBuffer"版本。该组件已替换为扣库任务表方案（见 [docs/STOCK_DEDUCT_TASK_DESIGN.md](docs/STOCK_DEDUCT_TASK_DESIGN.md)），秒杀入口代码未改动，新版本的 QPS / 平均响应时间需按 [docs/SECKILL_RETEST_GUIDE.md](docs/SECKILL_RETEST_GUIDE.md) 重新压测后更新。
+
 > **最新实测成果**：  
 > 在单机 Windows 11 + Docker WSL2 虚拟化环境下，承载 **180,000 笔** 极速并发下单冲击，达成 **10,271.6 QPS、0.00% 报错、平均响应 48ms、长尾延迟 < 196ms、CPU 仅占用 ~30%、GC 活动 0.0%** 的卓越工业级战绩。
 
