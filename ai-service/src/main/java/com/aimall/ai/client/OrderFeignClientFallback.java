@@ -13,6 +13,24 @@ public class OrderFeignClientFallback implements OrderFeignClient {
         return Result.fail("订单服务暂时不可用");
     }
 
+    /** 熔断 / 超时时下单结果未知（订单可能已经创建），用 503 区分于业务失败，调用方不得据此作废确认单 */
+    public static final int RESULT_UNKNOWN = 503;
+
+    @Override
+    public Result<String> createOrderWithConfirmToken(Long productId, int quantity, Long userId, String confirmToken) {
+        return Result.fail(RESULT_UNKNOWN, "订单服务暂时不可用，下单结果未知，请稍后用同一确认单重试");
+    }
+
+    @Override
+    public Result<List<String>> findOrderNosByConfirmToken(String confirmToken, Long userId) {
+        return Result.fail(RESULT_UNKNOWN, "订单服务暂时不可用");
+    }
+
+    @Override
+    public Result<Map<String, Object>> checkoutCartWithConfirmToken(Long userId, String confirmToken) {
+        return Result.fail(RESULT_UNKNOWN, "订单服务暂时不可用，结算结果未知，请稍后用同一确认单重试");
+    }
+
     @Override
     public Result<List<Map<String, Object>>> getUserOrders(Long userId) {
         return Result.fail("订单服务暂时不可用");

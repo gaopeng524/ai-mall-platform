@@ -589,7 +589,9 @@ public class MallTools {
 
                     OrderConfirmDraft draft = new OrderConfirmDraft(
                             confirmToken, uid, null, "购物车合并结算商品(" + selectedCount + "件)",
-                            totalAmount, selectedCount, totalAmount, "", "CART", summary, now, expireAt
+                            totalAmount, selectedCount, totalAmount, "", "CART", summary, now, expireAt,
+                            // 保存已勾选商品快照（商品、单价、数量），确认时逐项与最新购物车比对
+                            snapshotSelectedCartItems(cart), OrderConfirmDraft.STATUS_PENDING, null
                     );
 
                     if (redisFallbackManager != null) {
@@ -685,5 +687,34 @@ public class MallTools {
                     item.get("subtotal"), Boolean.TRUE.equals(item.get("selected")) ? "已勾选" : "未勾选"));
         }
         return sb.toString();
+    }
+
+    /** 从购物车数据中提取已勾选商品的快照 */
+    @SuppressWarnings("unchecked")
+    public static List<OrderConfirmDraft.Item> snapshotSelectedCartItems(Map<String, Object> cart) {
+        List<OrderConfirmDraft.Item> items = new ArrayList<>();
+        Object raw = cart != null ? cart.get("items") : null;
+        if (!(raw instanceof List<?> list)) {
+            return items;
+        }
+        for (Object o : list) {
+            if (!(o instanceof Map<?, ?> m)) {
+                continue;
+            }
+            Map<String, Object> item = (Map<String, Object>) m;
+            if (!Boolean.parseBoolean(String.valueOf(item.getOrDefault("selected", "false")))) {
+                continue;
+            }
+            try {
+                items.add(new OrderConfirmDraft.Item(
+                        Long.valueOf(String.valueOf(item.get("productId"))),
+                        String.valueOf(item.getOrDefault("productName", "")),
+                        Double.valueOf(String.valueOf(item.get("price"))),
+                        Integer.valueOf(String.valueOf(item.get("quantity")))));
+            } catch (Exception ignored) {
+                // 字段缺失的条目跳过；确认时会因为与购物车不一致而要求重新确认
+            }
+        }
+        return items;
     }
 }

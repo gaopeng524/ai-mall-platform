@@ -36,6 +36,11 @@ public class Result<T> {
         return new Result<>(code, message, null);
     }
 
+    /** 失败但携带数据（例如：下单前复核发现价格变化，返回差异明细让前端重新确认） */
+    public static <T> Result<T> fail(Integer code, String message, T data) {
+        return new Result<>(code, message, data);
+    }
+
     public static <T> Result<T> fail(String message) {
         return new Result<>(500, message, null);
     }

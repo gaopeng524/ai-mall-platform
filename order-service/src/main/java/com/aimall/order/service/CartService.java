@@ -300,6 +300,14 @@ public class CartService {
      * 7. 一键合并结算下单：生成订单并自动清除已结算商品，跳转 5 分钟收银台
      */
     public CartCheckoutVO checkout(Long userId) {
+        return checkout(userId, null);
+    }
+
+    /**
+     * @param confirmToken AI 确认单 token（可空）。每个商品行使用 token#productId 作为订单幂等键，
+     *                     重复结算同一个确认单不会重复下单。
+     */
+    public CartCheckoutVO checkout(Long userId, String confirmToken) {
         if (userId == null || userId <= 0) {
             throw new BusinessException(401, "请先登录商城账号后结算购物车");
         }
@@ -320,7 +328,7 @@ public class CartService {
         for (CartItemVO item : selectedItems) {
             try {
                 // 调用普通订单 2PC 分布式事务消息下单（扣减库存、落单、投递 5 分钟延时关单）
-                String orderNo = orderService.createOrder(item.getProductId(), item.getQuantity(), userId, false);
+                String orderNo = orderService.createOrder(item.getProductId(), item.getQuantity(), userId, false, confirmToken);
                 createdOrderNos.add(orderNo);
                 totalAmount = totalAmount.add(item.getSubtotal());
             } catch (Exception e) {

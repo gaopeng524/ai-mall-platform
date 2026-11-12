@@ -14,7 +14,11 @@ import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.springframework.messaging.Message;
 import org.springframework.stereotype.Component;
 
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.support.TransactionTemplate;
+
 import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 生产级 RocketMQ 分布式事务消息监听器（2PC 两阶段提交）
@@ -32,6 +36,7 @@ public class NormalOrderTransactionListener implements RocketMQLocalTransactionL
     private final OrderMapper orderMapper;
     private final ProductRemoteClient productRemoteClient;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 第一阶段：执行本地事务（落单 + 物理扣库存）
@@ -47,48 +52,65 @@ public class NormalOrderTransactionListener implements RocketMQLocalTransactionL
         String orderNo = orderMsg.getOrderNo();
         log.info("[RocketMQ事务消息-本地执行] 收到 Half 预备消息，开始执行本地事务: 订单号 = {}", orderNo);
 
+        // 是否已经成功调用了远程扣减（决定失败时要不要补偿）
+        AtomicBoolean stockDeducted = new AtomicBoolean(false);
         try {
-            // 1. 同步扣减商品库存 (Redis 预扣 + MySQL 物理行锁)
-            Result<Boolean> deductResult = productRemoteClient.deductStock(
-                    orderMsg.getProductId(),
-                    orderMsg.getQuantity()
-            );
+            transactionTemplate.executeWithoutResult(status -> {
+                // 1. 先落单：confirm_token 唯一索引在这里拦截重复确认 / 并发双击，
+                //    重复请求直接 DuplicateKeyException，根本不会走到扣库存，避免"多扣再补"
+                orderMapper.insert(buildOrder(orderMsg));
 
-            if (deductResult == null || !Boolean.TRUE.equals(deductResult.getData())) {
-                log.warn("[本地事务回滚] 商品 {} 库存扣减失败，通知 Broker 丢弃半消息: 订单号 = {}",
-                        orderMsg.getProductId(), orderNo);
-                return RocketMQLocalTransactionState.ROLLBACK;
-            }
-
-            // 2. 本地 orders 表平滑落单
-            Order order = new Order();
-            order.setOrderNo(orderNo);
-            order.setUserId(orderMsg.getUserId());
-            order.setProductId(orderMsg.getProductId());
-            order.setProductName(orderMsg.getProductName());
-            order.setPrice(orderMsg.getPrice());
-            order.setQuantity(orderMsg.getQuantity());
-            order.setTotalAmount(orderMsg.getTotalAmount());
-            order.setStatus("PENDING");
-            order.setCreatedAt(LocalDateTime.now());
-            order.setUpdatedAt(LocalDateTime.now());
-            order.setDeleted(0);
-
-            orderMapper.insert(order);
+                // 2. 同一个本地事务内同步扣减商品库存 (Redis 预扣 + MySQL 物理行锁)
+                Result<Boolean> deductResult = productRemoteClient.deductStock(
+                        orderMsg.getProductId(), orderMsg.getQuantity());
+                if (deductResult == null || !Boolean.TRUE.equals(deductResult.getData())) {
+                    throw new StockDeductFailedException(orderMsg.getProductId());
+                }
+                stockDeducted.set(true);
+            });
             log.info("[本地事务提交成功] 订单 {} 落库成功，向 Broker 发送 COMMIT 确认，激活下游投递！", orderNo);
-
-            // 3. 本地事务成功，通知 Broker 正式提交 Commit 消息！
             return RocketMQLocalTransactionState.COMMIT;
-
+        } catch (DuplicateKeyException e) {
+            log.info("[本地事务幂等拦截] 订单 {} 的幂等键 {} 已存在对应订单，丢弃本次半消息", orderNo, orderMsg.getConfirmToken());
+            return RocketMQLocalTransactionState.ROLLBACK;
+        } catch (StockDeductFailedException e) {
+            log.warn("[本地事务回滚] 商品 {} 库存扣减失败，订单落库已随事务回滚，通知 Broker 丢弃半消息: 订单号 = {}",
+                    orderMsg.getProductId(), orderNo);
+            return RocketMQLocalTransactionState.ROLLBACK;
         } catch (Exception e) {
-            log.error("[本地事务异常] 订单 {} 执行本地事务异常，回滚库存并丢弃半消息: {}", orderNo, e.getMessage(), e);
-            // 异常补偿：尝试回滚库存
-            try {
-                productRemoteClient.rollbackStock(orderMsg.getProductId(), orderMsg.getQuantity());
-            } catch (Exception ex) {
-                log.error("[本地事务补偿异常] 回滚库存失败: {}", ex.getMessage());
+            log.error("[本地事务异常] 订单 {} 执行本地事务异常，丢弃半消息: {}", orderNo, e.getMessage(), e);
+            // 只有远程扣减已成功、但本地事务提交失败时才需要补偿库存
+            if (stockDeducted.get()) {
+                try {
+                    productRemoteClient.rollbackStock(orderMsg.getProductId(), orderMsg.getQuantity());
+                } catch (Exception ex) {
+                    log.error("[本地事务补偿异常] 回滚库存失败: {}", ex.getMessage());
+                }
             }
             return RocketMQLocalTransactionState.ROLLBACK;
+        }
+    }
+
+    private Order buildOrder(OrderCreateMessage orderMsg) {
+        Order order = new Order();
+        order.setOrderNo(orderMsg.getOrderNo());
+        order.setUserId(orderMsg.getUserId());
+        order.setProductId(orderMsg.getProductId());
+        order.setProductName(orderMsg.getProductName());
+        order.setPrice(orderMsg.getPrice());
+        order.setQuantity(orderMsg.getQuantity());
+        order.setTotalAmount(orderMsg.getTotalAmount());
+        order.setConfirmToken(orderMsg.getConfirmToken());
+        order.setStatus("PENDING");
+        order.setCreatedAt(LocalDateTime.now());
+        order.setUpdatedAt(LocalDateTime.now());
+        order.setDeleted(0);
+        return order;
+    }
+
+    static final class StockDeductFailedException extends RuntimeException {
+        StockDeductFailedException(Long productId) {
+            super("库存扣减失败: productId=" + productId);
         }
     }
 

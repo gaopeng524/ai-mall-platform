@@ -43,10 +43,26 @@ public class OrderController {
             @RequestParam(value = "quantity", required = false, defaultValue = "1") Integer quantity,
             @RequestParam(value = "userId", required = false) Long userId,
             @RequestParam(value = "isSeckill", required = false, defaultValue = "false") Boolean isSeckill,
+            @RequestParam(value = "confirmToken", required = false) String confirmToken,
             HttpServletRequest request) {
         Long effectiveUserId = resolveAuthorizedUserId(userId, request);
-        String orderNo = orderService.createOrder(productId, quantity, effectiveUserId, isSeckill);
+        String orderNo = orderService.createOrder(productId, quantity, effectiveUserId, isSeckill, confirmToken);
         return Result.success("订单创建成功", orderNo);
+    }
+
+    /**
+     * 按确认单 token 查询已生成的订单号（AI 确认单重试 / 响应丢失后对账用）
+     */
+    @GetMapping("/by-confirm-token")
+    public Result<List<String>> findByConfirmToken(
+            @RequestParam("confirmToken") String confirmToken,
+            @RequestParam(value = "userId", required = false) Long userId,
+            HttpServletRequest request) {
+        Long effectiveUserId = resolveAuthorizedUserId(userId, request);
+        List<String> orderNos = orderService.findOrdersByConfirmToken(confirmToken, effectiveUserId).stream()
+                .map(com.aimall.order.entity.Order::getOrderNo)
+                .toList();
+        return Result.success(orderNos);
     }
 
     /**

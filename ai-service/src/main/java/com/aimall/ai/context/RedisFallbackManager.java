@@ -392,4 +392,29 @@ public class RedisFallbackManager {
                 () -> {}
         );
     }
+
+    /**
+     * 确认单提交互斥锁：同一个 confirmToken 同一时刻只允许一个请求真正去下单（防并发双击）。
+     * 拿不到锁的请求等待持有者把草稿标记为 USED 后直接返回同一订单。
+     */
+    public boolean tryLockOrderConfirm(String confirmToken, String owner, Duration ttl) {
+        String key = "ai:order:confirm:lock:" + confirmToken;
+        return Boolean.TRUE.equals(execute(
+                () -> Boolean.TRUE.equals(stringRedisTemplate.opsForValue().setIfAbsent(key, owner, ttl)),
+                () -> localSessionLocks.putIfAbsent("confirm:" + confirmToken, owner) == null
+        ));
+    }
+
+    public void unlockOrderConfirm(String confirmToken, String owner) {
+        String key = "ai:order:confirm:lock:" + confirmToken;
+        execute(
+                () -> {
+                    String holder = stringRedisTemplate.opsForValue().get(key);
+                    if (owner != null && owner.equals(holder)) {
+                        stringRedisTemplate.delete(key);
+                    }
+                },
+                () -> localSessionLocks.remove("confirm:" + confirmToken, owner)
+        );
+    }
 }

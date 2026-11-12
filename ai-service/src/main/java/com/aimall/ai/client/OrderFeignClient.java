@@ -23,6 +23,20 @@ public interface OrderFeignClient {
             @RequestParam("quantity") int quantity,
             @RequestParam("userId") Long userId);
 
+    /** 带下单幂等键的下单：同一个 confirmToken 重复调用返回同一笔订单 */
+    @PostMapping("/order/create")
+    Result<String> createOrderWithConfirmToken(
+            @RequestParam("productId") Long productId,
+            @RequestParam("quantity") int quantity,
+            @RequestParam("userId") Long userId,
+            @RequestParam("confirmToken") String confirmToken);
+
+    /** 按确认单 token 查询已生成的订单号 */
+    @GetMapping("/order/by-confirm-token")
+    Result<List<String>> findOrderNosByConfirmToken(
+            @RequestParam("confirmToken") String confirmToken,
+            @RequestParam("userId") Long userId);
+
     @GetMapping("/order/list")
     Result<List<Map<String, Object>>> getUserOrders(@RequestParam("userId") Long userId);
 
@@ -42,6 +56,12 @@ public interface OrderFeignClient {
 
     @PostMapping("/cart/checkout")
     Result<Map<String, Object>> checkoutCart(@RequestParam("userId") Long userId);
+
+    /** 带确认单幂等键的购物车结算 */
+    @PostMapping("/cart/checkout")
+    Result<Map<String, Object>> checkoutCartWithConfirmToken(
+            @RequestParam("userId") Long userId,
+            @RequestParam("confirmToken") String confirmToken);
 
     @PostMapping("/cart/clear")
     Result<Boolean> clearCart(@RequestParam("userId") Long userId);

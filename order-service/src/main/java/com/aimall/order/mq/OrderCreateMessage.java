@@ -27,4 +27,6 @@ public class OrderCreateMessage implements Serializable {
     private Integer quantity;
     private BigDecimal totalAmount;
     private String traceId;
+    /** 下单幂等键（可空），见 Order#confirmToken */
+    private String confirmToken;
 }

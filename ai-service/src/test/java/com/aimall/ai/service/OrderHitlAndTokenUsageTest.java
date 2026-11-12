@@ -153,13 +153,16 @@ class OrderHitlAndTokenUsageTest {
 
         // 模拟 Redis 读取草稿
         when(redisFallbackManager.getOrderDraft(confirmToken)).thenReturn(draftJson);
-        when(orderFeignClient.createOrder(10L, 1, 1001L)).thenReturn(Result.success("ORD9999"));
+        when(redisFallbackManager.tryLockOrderConfirm(eq(confirmToken), anyString(), any(Duration.class))).thenReturn(true);
+        when(productFeignClient.getById(10L)).thenReturn(Result.success(Map.of("name", "李宁赤兔6 Pro", "price", 399.00, "stock", 10)));
+        when(orderFeignClient.createOrderWithConfirmToken(10L, 1, 1001L, confirmToken)).thenReturn(Result.success("ORD9999"));
 
-        // 1. 正常确认
+        // 1. 正常确认（成功后草稿不删除，而是标记为已使用并保存订单号）
         Result<Map<String, Object>> result = service.confirmOrderDraft(confirmToken, 1001L);
         assertTrue(result.isSuccess());
         assertEquals("ORD9999", result.getData().get("orderNo"));
-        verify(redisFallbackManager, times(1)).deleteOrderDraft(confirmToken);
+        verify(redisFallbackManager, never()).deleteOrderDraft(confirmToken);
+        verify(redisFallbackManager).putOrderDraft(eq(confirmToken), contains("\"USED\""), any(Duration.class));
 
         // 2. 越权校验（他人确认草稿必须被拦截）
         when(redisFallbackManager.getOrderDraft(confirmToken)).thenReturn(draftJson);

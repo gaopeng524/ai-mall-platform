@@ -98,11 +98,47 @@ public class OrderService {
      *                  false -> 普通订单分布式事务消息通道（RocketMQ 2PC 强一致性事务消息 + Caffeine 本地缓存）
      */
     public String createOrder(Long productId, Integer quantity, Long userId, Boolean isSeckill) {
+        return createOrder(productId, quantity, userId, isSeckill, null);
+    }
+
+    /**
+     * @param confirmToken 下单幂等键（AI 确认单 token，可空）。同一个 token + 商品只会生成一笔订单：
+     *                     重复提交或并发双击时返回已存在的那笔订单号。
+     */
+    public String createOrder(Long productId, Integer quantity, Long userId, Boolean isSeckill, String confirmToken) {
         if (Boolean.TRUE.equals(isSeckill)) {
             return createSeckillOrder(productId, quantity, userId);
         } else {
-            return createNormalOrderTransactional(productId, quantity, userId);
+            return createNormalOrderTransactional(productId, quantity, userId, confirmToken);
         }
+    }
+
+    /** 订单级幂等键：确认单 token + "#" + 商品ID（购物车结算一个 token 对应多笔订单） */
+    public static String lineConfirmToken(String confirmToken, Long productId) {
+        return confirmToken + "#" + productId;
+    }
+
+    /** 按确认单 token 查询它已生成的订单（含购物车多笔），只返回属于该用户的 */
+    public List<Order> findOrdersByConfirmToken(String confirmToken, Long userId) {
+        if (confirmToken == null || confirmToken.isBlank()) {
+            return List.of();
+        }
+        return orderMapper.selectList(new LambdaQueryWrapper<Order>()
+                .likeRight(Order::getConfirmToken, confirmToken + "#")
+                .eq(userId != null, Order::getUserId, userId)
+                .orderByAsc(Order::getId));
+    }
+
+    private Order findByLineConfirmToken(String lineToken) {
+        return orderMapper.selectOne(new LambdaQueryWrapper<Order>().eq(Order::getConfirmToken, lineToken));
+    }
+
+    private String existingOrderNoOrThrow(Order existing, Long userId) {
+        if (userId != null && !userId.equals(existing.getUserId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN.getCode(), "确认单不属于当前用户");
+        }
+        log.info("[下单幂等命中] 确认单 {} 已生成订单 {}，直接返回", existing.getConfirmToken(), existing.getOrderNo());
+        return existing.getOrderNo();
     }
 
     /**
@@ -124,6 +160,19 @@ public class OrderService {
      * 6. Broker 定时回查补偿机制（checkLocalTransaction），断网宕机亦不产生数据孤岛或死锁。
      */
     public String createNormalOrderTransactional(Long productId, Integer quantity, Long userId) {
+        return createNormalOrderTransactional(productId, quantity, userId, null);
+    }
+
+    public String createNormalOrderTransactional(Long productId, Integer quantity, Long userId, String confirmToken) {
+        // 0. 幂等：同一个确认单已经下过单，直接返回原订单（重试 / 响应丢失后重放）
+        String lineToken = (confirmToken == null || confirmToken.isBlank()) ? null : lineConfirmToken(confirmToken, productId);
+        if (lineToken != null) {
+            Order existing = findByLineConfirmToken(lineToken);
+            if (existing != null) {
+                return existingOrderNoOrThrow(existing, userId);
+            }
+        }
+
         // 1. 获取商品基础信息（Caffeine L1 本地多级缓存，0ms 读取）
         Map<String, Object> productData = getProductInfo(productId);
         String productName = String.valueOf(productData.get("name"));
@@ -145,6 +194,7 @@ public class OrderService {
                 .quantity(quantity)
                 .totalAmount(totalAmount)
                 .traceId(TraceContext.getTraceId())
+                .confirmToken(lineToken)
                 .build();
 
         log.info("[RocketMQ 2PC事务消息下单] 发送 Half 预备消息: 订单号 = {}, 商品 = {}, 数量 = {}",
@@ -162,6 +212,13 @@ public class OrderService {
             log.info("[RocketMQ事务消息投递结果] 订单: {}, SendStatus: {}, LocalTxState: {}",
                     orderNo, sendResult.getSendStatus(), sendResult.getLocalTransactionState());
 
+            if (sendResult.getLocalTransactionState() == LocalTransactionState.ROLLBACK_MESSAGE && lineToken != null) {
+                // 并发双击：另一笔请求已用同一个幂等键落单，本次被唯一索引拦截 → 返回那一笔
+                Order existing = findByLineConfirmToken(lineToken);
+                if (existing != null) {
+                    return existingOrderNoOrThrow(existing, userId);
+                }
+            }
             if (sendResult.getLocalTransactionState() == LocalTransactionState.ROLLBACK_MESSAGE) {
                 log.warn("[事务下单回滚] 订单 {} 本地事务执行失败/已回滚 (库存不足或数据异常)", orderNo);
                 throw new BusinessException(ErrorCode.PRODUCT_STOCK_INSUFFICIENT.getCode(), "商品库存不足，下单失败");

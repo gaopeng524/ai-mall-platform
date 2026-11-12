@@ -75,10 +75,12 @@ CREATE TABLE IF NOT EXISTS orders (
     price        DECIMAL(10,2) NOT NULL COMMENT '单价',
     quantity     INT NOT NULL COMMENT '数量',
     total_amount DECIMAL(10,2) NOT NULL COMMENT '总金额',
+    confirm_token VARCHAR(96) NULL COMMENT '下单幂等键(确认单token#商品ID)',
     status       VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT '状态 PENDING/PAID/SHIPPED/DONE/CANCELLED',
     created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deleted      TINYINT NOT NULL DEFAULT 0
+    deleted      TINYINT NOT NULL DEFAULT 0,
+    UNIQUE INDEX uk_orders_confirm_token (confirm_token)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单表';
 
 -- 支付流水表初始化

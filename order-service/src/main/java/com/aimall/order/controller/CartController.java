@@ -111,9 +111,10 @@ public class CartController {
      * 一键合并结算：生成订单并自动清除已结算商品，跳转 5 分钟收银台
      */
     @PostMapping("/checkout")
-    public Result<CartCheckoutVO> checkout(@RequestParam(value = "userId", required = false) Long userId) {
+    public Result<CartCheckoutVO> checkout(@RequestParam(value = "userId", required = false) Long userId,
+                                           @RequestParam(value = "confirmToken", required = false) String confirmToken) {
         Long effectiveUserId = resolveEffectiveUserId(userId);
-        CartCheckoutVO result = cartService.checkout(effectiveUserId);
+        CartCheckoutVO result = cartService.checkout(effectiveUserId, confirmToken);
         return Result.success("结算成功", result);
     }
 }
