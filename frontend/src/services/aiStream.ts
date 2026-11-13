@@ -169,7 +169,8 @@ export async function startAiStream(
                 description: String(p.description || ''),
                 imageUrl: p.imageUrl ? String(p.imageUrl) : undefined,
                 isSeckill: Boolean(p.isSeckill),
-                originalPrice: p.originalPrice ? Number(p.originalPrice) : undefined
+                originalPrice: p.originalPrice ? Number(p.originalPrice) : undefined,
+                searchMatch: p.searchMatch === 'alternative' ? 'alternative' : undefined
               }));
               callbacks.onEmbeddedProducts?.(normalizedProducts);
             } else if (eventObj.event === 'order_confirm') {

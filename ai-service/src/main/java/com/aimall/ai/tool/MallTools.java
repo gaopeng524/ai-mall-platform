@@ -4,7 +4,7 @@ import com.aimall.ai.client.OrderFeignClient;
 import com.aimall.ai.client.ProductFeignClient;
 import com.aimall.ai.context.AiToolExecutionContext;
 import com.aimall.ai.dto.OrderConfirmDraft;
-import com.aimall.ai.intent.QueryIntentClassifier;
+import com.aimall.common.result.Result;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Description;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -125,16 +126,45 @@ public class MallTools {
     @Description("【首选核心查询工具】根据关键词、商品名称、品牌或品类和预算搜索商品列表，返回商品ID、名称、分类、价格、实时库存与核心卖点。凡是用户按名称找商品、询问商品库存、查询价格、或者未获知确切数字ID时，必须调用此工具！")
     public BiFunction<SearchRequest, ToolContext, String> searchProducts() {
         return (request, toolContext) -> AiToolExecutionContext.executeInToolContext("searchProducts", toolContext, request, () -> {
+            if (AiToolExecutionContext.isProductServiceRateLimited()) {
+                return "【服务受限】本轮商品服务已触发限流，请直接说明暂时无法获取实时商品数据。";
+            }
+            if (!AiToolExecutionContext.tryProductSearch()) {
+                return "【检索已结束】本轮已执行两次商品搜索，请基于已返回的结果回答。";
+            }
             String kw = request.keyword() != null ? request.keyword() : "";
             double price = request.maxPrice() != null ? request.maxPrice() : 0.0;
+            var context = toolContext != null ? toolContext.getContext() : null;
+            Object originalRequest = context == null ? null : context.get("productRequestText");
+            String requestText = originalRequest instanceof String text ? text : "";
+            boolean includeAlternatives = context != null && Boolean.TRUE.equals(context.get("includeAlternatives"));
             String detailDesc = String.format("关键词: %s%s",
                     kw.isBlank() ? "全部商品" : kw,
                     price > 0 ? ", 预算上限: ¥" + (int) price : "");
 
             AiToolExecutionContext.emitToolStep("product_query", "正在调用商品服务检索商品与实时库存", detailDesc, "running");
-            log.info("[AI Tool] searchProducts: keyword={}, maxPrice={}", kw, price);
+            log.info("[AI Tool] searchProducts: keyword={}, maxPrice={}, includeAlternatives={}", kw, price, includeAlternatives);
             try {
-                var result = productFeignClient.search(kw, price);
+                Result<?> result;
+                List<Map<String, Object>> matches = List.of();
+                List<Map<String, Object>> alternatives = List.of();
+                if (includeAlternatives) {
+                    var response = productFeignClient.discover(kw, price, requestText);
+                    result = response;
+                    if (response != null && response.isSuccess() && response.getData() != null) {
+                        matches = response.getData().matches() != null ? response.getData().matches() : List.of();
+                        alternatives = response.getData().alternatives() != null ? response.getData().alternatives() : List.of();
+                    }
+                } else {
+                    var response = requestText.isBlank()
+                            ? productFeignClient.search(kw, price)
+                            : productFeignClient.search(kw, price, requestText);
+                    result = response;
+                    if (response != null && response.isSuccess() && response.getData() != null) {
+                        matches = response.getData();
+                    }
+                }
+
                 // 1. 优先捕获微服务 Sentinel 限流 (如 HTTP 429) 或 Feign 降级异常
                 if (result != null && result.getCode() != 200) {
                     AiToolExecutionContext.markProductServiceRateLimited();
@@ -144,36 +174,37 @@ public class MallTools {
                     return "【服务受限】商品查询服务已被 Sentinel 限流保护（状态码: " + result.getCode() + "，" + errorMsg + "）。当前无法获取该商品的实时在售库存与详情。严禁继续改调 getProductDetail 绕过限流！请直接且如实告知用户当前系统正在进行限流保护，暂时无法获取实时库存，建议稍后再试，绝对严禁向用户捏造任何虚假库存数字！";
                 }
 
-                // 2. 核心智能容错降级：若初次长关键词未命中，自动剥离口语或泛品类后缀泛化重试（如“李宁赤兔6跑鞋” -> “李宁赤兔”）
-                if ((result == null || result.getData() == null || result.getData().isEmpty()) && !kw.isBlank()) {
-                    String relaxed = QueryIntentClassifier.relaxKeyword(kw);
-                    if (!relaxed.equalsIgnoreCase(kw.trim())) {
-                        log.info("[AI Tool] searchProducts 初始关键词 '{}' 未查到商品，触发降级泛化重试: '{}'", kw, relaxed);
-                        result = productFeignClient.search(relaxed, price);
-                        if (result != null && result.getCode() != 200) {
-                            AiToolExecutionContext.markProductServiceRateLimited();
-                            String errorMsg = result.getMessage() != null ? result.getMessage() : "商品服务已被限流或不可用";
-                            AiToolExecutionContext.emitToolStep("product_query", "商品服务已被 Sentinel 限流拦截", errorMsg, "failed");
-                            return "【服务受限】商品查询服务已被 Sentinel 限流保护（" + errorMsg + "）。请如实告知用户当前服务限流，无法获取实时库存，绝对严禁捏造虚假库存！";
-                        }
-                    }
+                if (result == null || result.getData() == null) {
+                    return "商品查询服务暂时不可用，请稍后再试";
                 }
-
-                if (result == null || result.getData() == null || result.getData().isEmpty()) {
+                if (matches.isEmpty() && alternatives.isEmpty()) {
                     AiToolExecutionContext.emitToolStep("product_query", "商品检索完成（未找到匹配项）", detailDesc, "success");
                     return "暂未找到符合条件的商品。请确认商品名称或换用更简短的关键词（如“李宁”或“跑鞋”）再次搜索。";
                 }
-                List<Map<String, Object>> products = result.getData();
-                List<Map<String, Object>> topProducts = products.stream().limit(6).toList();
+
+                List<Map<String, Object>> matchedCards = matches.stream().limit(alternatives.isEmpty() ? 6 : 3).toList();
+                List<Map<String, Object>> alternativeCards = alternatives.stream().limit(6 - matchedCards.size()).toList();
+                List<Map<String, Object>> topProducts = new ArrayList<>(matchedCards);
+                for (Map<String, Object> alternative : alternativeCards) {
+                    var card = new HashMap<>(alternative);
+                    card.put("searchMatch", "alternative");
+                    topProducts.add(card);
+                }
                 AiToolExecutionContext.emitToolStep("product_query",
-                        "已检索到 " + products.size() + " 款商品，推荐精选前 " + topProducts.size() + " 款", detailDesc, "success");
-                // 旁路直接向前端推送可交互商品卡片（带图片与一键下单按钮）
+                        "已展示 " + matchedCards.size() + " 款匹配商品、" + alternativeCards.size() + " 款平替", detailDesc, "success");
                 AiToolExecutionContext.emitProducts(topProducts);
 
-                // 返回给大模型精简版信息，节省 Token
-                return topProducts.stream()
+                String matchedText = matchedCards.stream()
                         .map(this::formatCompactProduct)
                         .collect(Collectors.joining("\n"));
+                if (alternativeCards.isEmpty()) {
+                    return matchedText;
+                }
+                String alternativeText = alternativeCards.stream()
+                        .map(this::formatCompactProduct)
+                        .collect(Collectors.joining("\n"));
+                return "【原搜索匹配】\n" + (matchedText.isEmpty() ? "暂无符合条件的原商品" : matchedText)
+                        + "\n【同品类平替】\n" + alternativeText;
             } catch (Exception e) {
                 log.error("搜索商品失败", e);
                 AiToolExecutionContext.emitToolStep("product_query", "商品检索服务异常", e.getMessage(), "failed");

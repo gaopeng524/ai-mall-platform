@@ -7,6 +7,8 @@ interface ProductListProps {
   products: Product[];
   activeCategory: string;
   searchQuery: string;
+  offline: boolean;
+  searching: boolean;
   onAskAi: (product: Product) => void;
   onBuy: (product: Product) => void;
   onAddToCart: (product: Product) => void;
@@ -17,6 +19,8 @@ export const ProductList: React.FC<ProductListProps> = ({
   products,
   activeCategory,
   searchQuery,
+  offline,
+  searching,
   onAskAi,
   onBuy,
   onAddToCart,
@@ -41,7 +45,7 @@ export const ProductList: React.FC<ProductListProps> = ({
         : p.category === activeCategory;
 
     const matchSearch =
-      searchQuery.trim() === '' ||
+      !offline || searchQuery.trim() === '' ||
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.description.toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -49,7 +53,7 @@ export const ProductList: React.FC<ProductListProps> = ({
   });
 
   // 排序商品
-  const sortedProducts = [...filteredProducts].sort((a, b) => {
+  const sortedProducts = (searching ? [] : [...filteredProducts]).sort((a, b) => {
     if (sortBy === 'price-asc') return a.price - b.price;
     if (sortBy === 'price-desc') return b.price - a.price;
     return 0;
@@ -147,7 +151,9 @@ export const ProductList: React.FC<ProductListProps> = ({
       </div>
 
       {/* 商品卡片网格：紧凑对齐，杜绝错位拉伸 */}
-      {sortedProducts.length > 0 ? (
+      {searching ? (
+        <p role="status" className="py-16 text-center text-sm text-slate-500">正在搜索商品…</p>
+      ) : sortedProducts.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 items-start">
           {sortedProducts.map((product) => (
             <ProductCard

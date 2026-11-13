@@ -21,6 +21,20 @@ public interface ProductFeignClient {
             @RequestParam("keyword") String keyword,
             @RequestParam("maxPrice") double maxPrice);
 
+    @GetMapping("/product/search")
+    Result<List<Map<String, Object>>> search(
+            @RequestParam("keyword") String keyword,
+            @RequestParam("maxPrice") double maxPrice,
+            @RequestParam("requestText") String requestText);
+
+    @GetMapping("/product/discover")
+    Result<Discovery> discover(
+            @RequestParam("keyword") String keyword,
+            @RequestParam("maxPrice") double maxPrice,
+            @RequestParam("requestText") String requestText);
+
+    record Discovery(List<Map<String, Object>> matches, List<Map<String, Object>> alternatives) {}
+
     @GetMapping("/product/{id}")
     Result<Map<String, Object>> getById(@PathVariable("id") Long id);
 }

@@ -25,9 +25,18 @@ public class ProductController {
     @GetMapping({"/search", "/list"})
     public Result<List<Product>> search(
             @RequestParam(value = "keyword", required = false, defaultValue = "") String keyword,
-            @RequestParam(value = "maxPrice", required = false, defaultValue = "0") double maxPrice) {
+            @RequestParam(value = "maxPrice", required = false, defaultValue = "0") double maxPrice,
+            @RequestParam(value = "requestText", defaultValue = "") String requestText) {
         log.info("[商品搜索查询] 收到请求: keyword={}, maxPrice={}", keyword, maxPrice);
-        return Result.success(productService.search(keyword, maxPrice));
+        return Result.success(productService.search(keyword, maxPrice, requestText));
+    }
+
+    @GetMapping("/discover")
+    public Result<ProductService.Discovery> discover(
+            @RequestParam(value = "keyword", defaultValue = "") String keyword,
+            @RequestParam(value = "maxPrice", defaultValue = "0") double maxPrice,
+            @RequestParam(value = "requestText", defaultValue = "") String requestText) {
+        return Result.success(productService.discover(keyword, maxPrice, requestText));
     }
 
     /**

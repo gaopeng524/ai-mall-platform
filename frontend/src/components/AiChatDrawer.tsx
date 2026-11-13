@@ -528,6 +528,9 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                       />
                       <div className="min-w-0">
                         <div className="font-bold text-xs text-slate-900 truncate">{p.name}</div>
+                        {p.searchMatch === 'alternative' && (
+                          <span className="text-[10px] font-semibold text-indigo-600">同品类平替</span>
+                        )}
                         <div className="text-xs font-black text-rose-600 mt-0.5">
                           ¥{Number(p.price).toFixed(2)}
                           <span className="text-[10px] text-slate-400 font-normal ml-1">库存:{p.stock}</span>
@@ -577,7 +580,7 @@ export const AiChatDrawer: React.FC<AiChatDrawerProps> = ({
                     </div>
                     <div className="text-slate-500 mt-0.5 text-[11px]">
                       {msg.orderConfirmDraft.orderType === 'CART'
-                        ? `共 ${msg.orderConfirmDraft.quantity} 件已选商品合并结算`
+                        ? msg.orderConfirmDraft.summary || `共 ${msg.orderConfirmDraft.quantity} 件已选商品合并结算`
                         : `单价: ¥${Number(msg.orderConfirmDraft.price || 0).toFixed(2)} · 数量: ${msg.orderConfirmDraft.quantity} 件`}
                     </div>
                     <div className="mt-1 font-bold text-rose-600 text-sm">

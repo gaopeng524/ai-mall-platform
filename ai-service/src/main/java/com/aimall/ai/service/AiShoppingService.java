@@ -376,9 +376,10 @@ public class AiShoppingService {
                     // 2. 加载会话历史（优先从 Redis 读取）
                     List<Message> history = loadSessionHistory(effectiveSessionId);
 
-                    // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话、非交易/库存问句且启用缓存时生效）
+                    // 3. 两级问句语义缓存（L1 精确匹配 + L2 pgvector 向量语义匹配；非图片、首轮会话、非交易/实时在售问句且启用缓存时生效）
                     boolean isCandidateForCache = queryCacheEnabled && !hasImage && history.isEmpty()
-                            && !QueryIntentClassifier.isTransactional(userPrompt);
+                            && !QueryIntentClassifier.isTransactional(userPrompt)
+                            && !QueryIntentClassifier.requiresFreshProductResults(userPrompt);
                     SemanticCacheService.Lookup cacheLookup = null;
                     if (isCandidateForCache) {
                         try {
@@ -490,6 +491,8 @@ public class AiShoppingService {
 
                         Map<String, Object> toolCtx = new HashMap<>();
                         toolCtx.put("sessionId", effectiveSessionId);
+                        toolCtx.put("productRequestText", userPrompt.substring(0, Math.min(256, userPrompt.length())));
+                        toolCtx.put("includeAlternatives", QueryIntentClassifier.requestsAlternatives(userPrompt));
                         if (effectiveUserId != null) {
                             toolCtx.put("userId", effectiveUserId);
                         }
@@ -588,17 +591,27 @@ public class AiShoppingService {
                     if (!isCancelled.get() && fullResponse.length() == 0) {
                         isFailoverTriggered = true;
                         log.warn("[AI 最终容错降级] 触发规则选品兜底推荐");
-                        try {
-                            String fallbackKeyword = hasImage ? "耳机" : (userPrompt.length() > 6 ? userPrompt.substring(0, 6) : userPrompt);
-                            var fallbackResult = productFeignClient.search(fallbackKeyword, 0.0);
-                            if (fallbackResult != null && fallbackResult.getData() != null && !fallbackResult.getData().isEmpty()) {
-                                AiToolExecutionContext.emitProducts(fallbackResult.getData());
+                        var emittedProducts = AiToolExecutionContext.getLastEmittedProducts();
+                        boolean hasProducts = emittedProducts != null && !emittedProducts.isEmpty();
+                        if (!hasProducts && !hasImage && !QueryIntentClassifier.isTransactional(userPrompt)
+                                && !QueryIntentClassifier.requiresFreshProductResults(userPrompt)
+                                && !AiToolExecutionContext.isProductServiceRateLimited()
+                                && AiToolExecutionContext.tryProductSearch()) {
+                            try {
+                                var fallbackResult = productFeignClient.search(userPrompt, 0.0);
+                                if (fallbackResult != null && fallbackResult.isSuccess()
+                                        && fallbackResult.getData() != null && !fallbackResult.getData().isEmpty()) {
+                                    AiToolExecutionContext.emitProducts(fallbackResult.getData().stream().limit(6).toList());
+                                    hasProducts = true;
+                                }
+                            } catch (Exception ex) {
+                                log.warn("[AI 降级选品 RPC 略过] {}", ex.getMessage());
                             }
-                        } catch (Exception ex) {
-                            log.warn("[AI 降级选品 RPC 略过] {}", ex.getMessage());
                         }
 
-                        String fallbackText = "抱歉亲，AI 导购大脑刚刚稍微开小差了～不过小购已为您调出商城热销的相关爆款与高性价比平替好物（见上方商品卡片），您可以先挑选看看；您也可以换个描述再问问我哦！";
+                        String fallbackText = hasProducts
+                                ? "导购回答暂时中断，您可以先查看已检索到的商品卡片。"
+                                : "导购暂时无法完成回答，请稍后重试。";
                         sink.next(AiToolExecutionContext.formatChunkEvent(fallbackText));
                         fullResponse.append(fallbackText);
                     }
@@ -1227,11 +1240,11 @@ public class AiShoppingService {
         if ("CART".equalsIgnoreCase(draft.orderType())) {
             resp.put("orderType", "CART");
             resp.put("orderNos", orderNos);
-            resp.put("primaryOrderNo", orderNos.isEmpty() ? null : orderNos.getFirst());
+            resp.put("primaryOrderNo", orderNos.isEmpty() ? null : orderNos.get(0));
             resp.put("itemCount", orderNos.size());
         } else {
             resp.put("orderType", "SINGLE");
-            resp.put("orderNo", orderNos.isEmpty() ? null : orderNos.getFirst());
+            resp.put("orderNo", orderNos.isEmpty() ? null : orderNos.get(0));
             resp.put("productId", draft.productId() != null ? draft.productId() : 0L);
             resp.put("productName", draft.productName() != null ? draft.productName() : "");
             resp.put("quantity", draft.quantity() != null ? draft.quantity() : 1);
@@ -1337,7 +1350,7 @@ public class AiShoppingService {
             total = Math.round(total * 100.0) / 100.0;
             boolean cart = "CART".equalsIgnoreCase(old.orderType());
             int count = items.stream().mapToInt(OrderConfirmDraft.Item::quantity).sum();
-            OrderConfirmDraft.Item first = items.getFirst();
+            OrderConfirmDraft.Item first = items.get(0);
             String token = (cart ? "CONFIRM_CART_" : "CONFIRM_") + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             String summary = cart
                     ? String.format("购物车合并结算：共 %d 件已选商品，合计 ¥%.2f", count, total)

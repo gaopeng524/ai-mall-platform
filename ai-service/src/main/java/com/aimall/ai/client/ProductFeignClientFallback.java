@@ -14,6 +14,14 @@ public class ProductFeignClientFallback implements ProductFeignClient {
         return Result.fail(429, "商品服务已被 Sentinel 限流保护，当前不可用");
     }
     @Override
+    public Result<List<Map<String, Object>>> search(String keyword, double maxPrice, String requestText) {
+        return search(keyword, maxPrice);
+    }
+    @Override
+    public Result<Discovery> discover(String keyword, double maxPrice, String requestText) {
+        return Result.fail(429, "商品服务已被 Sentinel 限流保护，当前不可用");
+    }
+    @Override
     public Result<Map<String, Object>> getById(Long id) {
         return Result.fail(429, "商品详情服务已被 Sentinel 限流保护，当前不可用");
     }

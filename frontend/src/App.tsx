@@ -16,7 +16,12 @@ export const App: React.FC = () => {
   const { gatewayUrl, addLog } = useConfig();
   const { user, token } = useAuth();
 
-  const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS);
+  const [catalog, setCatalog] = useState({
+    products: MOCK_PRODUCTS, keyword: '', gateway: gatewayUrl, offline: true
+  });
+  const { products } = catalog;
+  const productRequest = React.useRef<AbortController | null>(null);
+  const currentProductQuery = React.useRef({ gateway: gatewayUrl, keyword: '' });
   const [orders, setOrders] = useState<Order[]>(MOCK_ORDERS);
   const [activeCategory, setActiveCategory] = useState<string>('全部');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -43,39 +48,48 @@ export const App: React.FC = () => {
     setTimeout(() => setToastMessage(''), 4000);
   };
 
-  // 尝试从真实 product-service 获取商品数据
-  // 刷新拉取真实商品数据
+  // 刷新拉取真实商品数据（支持网关关键词搜索与请求取消防抖）
   const refreshProducts = React.useCallback(async () => {
+    const { gateway, keyword } = currentProductQuery.current;
+    productRequest.current?.abort();
+    const controller = new AbortController();
+    productRequest.current = controller;
     try {
-      const targetBase = gatewayUrl.endsWith('/') ? gatewayUrl.slice(0, -1) : gatewayUrl;
-      const res = await fetch(`${targetBase}/api/product/search?keyword=&maxPrice=0`);
+      const targetBase = gateway.endsWith('/') ? gateway.slice(0, -1) : gateway;
+      const params = new URLSearchParams({ keyword, maxPrice: '0' });
+      const res = await fetch(`${targetBase}/api/product/search?${params}`, { signal: controller.signal });
       const json = await res.json().catch(() => null);
+      if (controller.signal.aborted) return;
 
-      if (res.ok && json && json.code === 200 && Array.isArray(json.data) && json.data.length > 0) {
-        const enriched = json.data.map((p: any) => {
-          const mock = MOCK_PRODUCTS.find(m => m.id === p.id);
-          const isSeckill = Boolean(
-            p.isSeckill ||
-            p.category?.includes('秒杀') ||
-            p.name?.includes('秒杀') ||
-            mock?.isSeckill
-          );
-          return {
-            ...p,
-            isSeckill,
-            originalPrice: p.originalPrice || mock?.originalPrice || (isSeckill ? Math.round(p.price * 2.5) : undefined),
-            imageUrl: p.imageUrl || p.image_url || mock?.imageUrl || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80',
-            tags: p.tags || mock?.tags || (isSeckill ? ['⚡ 限时秒杀', '直降特惠'] : ['热销单品', '官方自营']),
-            specs: p.specs || mock?.specs || {}
-          };
-        });
-        setProducts(enriched);
-        setBackendStatus('✅ 已成功连接后端 product-service (8082)');
+      if (!res.ok || json?.code !== 200 || !Array.isArray(json.data)) {
+        throw new Error(json?.message || '商品查询失败');
       }
-    } catch (err: any) {
+
+      const enriched = json.data.map((p: any) => {
+        const mock = MOCK_PRODUCTS.find(m => m.id === p.id);
+        const isSeckill = Boolean(
+          p.isSeckill ||
+          p.category?.includes('秒杀') ||
+          p.name?.includes('秒杀') ||
+          mock?.isSeckill
+        );
+        return {
+          ...p,
+          isSeckill,
+          originalPrice: p.originalPrice || mock?.originalPrice || (isSeckill ? Math.round(p.price * 2.5) : undefined),
+          imageUrl: p.imageUrl || p.image_url || mock?.imageUrl || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80',
+          tags: p.tags || mock?.tags || (isSeckill ? ['⚡ 限时秒杀', '直降特惠'] : ['热销单品', '官方自营']),
+          specs: p.specs || mock?.specs || {}
+        };
+      });
+      setCatalog({ products: enriched, keyword, gateway, offline: false });
+      setBackendStatus('✅ 已成功连接后端 product-service (8082)');
+    } catch {
+      if (controller.signal.aborted) return;
+      setCatalog({ products: MOCK_PRODUCTS, keyword, gateway, offline: true });
       setBackendStatus('⚠️ 无法连接后端网关 (8080)，商品微服务暂未启动。当前展示静态设计稿。');
     }
-  }, [gatewayUrl]);
+  }, []);
 
   // 从 order-service 拉取真实用户的历史订单
   const refreshOrders = React.useCallback(async () => {
@@ -125,10 +139,19 @@ export const App: React.FC = () => {
   }, [gatewayUrl, user, token]);
 
   React.useEffect(() => {
-    refreshProducts();
+    const keyword = searchQuery.trim();
+    currentProductQuery.current = { gateway: gatewayUrl, keyword };
+    const timer = window.setTimeout(refreshProducts, keyword ? 250 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      productRequest.current?.abort();
+    };
+  }, [gatewayUrl, searchQuery, refreshProducts]);
+
+  React.useEffect(() => {
     refreshOrders();
     refreshCart();
-  }, [refreshProducts, refreshOrders, refreshCart]);
+  }, [refreshOrders, refreshCart]);
 
   // 点击“问 AI 导购”
   const handleAskAi = (product: Product) => {
@@ -276,13 +299,13 @@ export const App: React.FC = () => {
           }
         });
         const json = await res.json().catch(() => null);
-        if (res.ok && json && json.code === 200) {
-          showToast(`✅ 订单已取消，预扣库存已成功回滚归还！`);
+        if (res.ok && json?.code === 200 && json.data === true) {
+          showToast(json.message || '订单已取消，已触发库存归还');
           addLog({
             service: 'order-service',
             protocol: 'OpenFeign RPC',
             action: 'Order Cancelled & Stock Rollback',
-            detail: `订单已取消 (orderNo=${orderNo || ''}, orderId=${orderId})，已通过 Feign RPC 触发 product-service 回滚归还库存！`
+            detail: `订单已取消 (orderNo=${orderNo || ''}, orderId=${orderId})，已触发库存归还。`
           });
           refreshProducts(); // 重新拉取商品列表，库存立即恢复！
           refreshOrders();
@@ -581,6 +604,8 @@ export const App: React.FC = () => {
           products={products}
           activeCategory={activeCategory}
           searchQuery={searchQuery}
+          offline={catalog.offline}
+          searching={!catalog.offline && (catalog.keyword !== searchQuery.trim() || catalog.gateway !== gatewayUrl)}
           onAskAi={handleAskAi}
           onBuy={handleBuy}
           onAddToCart={handleAddToCart}

@@ -94,9 +94,9 @@ class ConfirmOrderDraftIdempotencyTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> diffs = (List<Map<String, Object>>) r.getData().get("diffs");
         assertEquals(1, diffs.size());
-        assertEquals("PRICE_CHANGED", diffs.getFirst().get("type"));
-        assertEquals(399.00, diffs.getFirst().get("before"));
-        assertEquals(459.00, diffs.getFirst().get("after"));
+        assertEquals("PRICE_CHANGED", diffs.get(0).get("type"));
+        assertEquals(399.00, diffs.get(0).get("before"));
+        assertEquals(459.00, diffs.get(0).get("after"));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> newDraft = (Map<String, Object>) r.getData().get("newDraft");

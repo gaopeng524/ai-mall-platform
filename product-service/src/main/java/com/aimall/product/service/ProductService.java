@@ -58,100 +58,106 @@ public class ProductService {
 
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
-    private static final Map<String, String> ALIAS_MAP = Map.ofEntries(
-            Map.entry("果15", "苹果 15"),
-            Map.entry("果子15", "苹果 15"),
-            Map.entry("果子", "苹果"),
-            Map.entry("米14", "小米 14"),
-            Map.entry("红米70", "红米 K70"),
-            Map.entry("k70", "红米 K70"),
-            Map.entry("华为60", "华为 Mate 60"),
-            Map.entry("mate60", "华为 Mate 60"),
-            Map.entry("xm5", "1000XM5"),
-            Map.entry("狗屁王", "GPW 罗技"),
-            Map.entry("狗屁王2", "GPW 罗技"),
-            Map.entry("赤兔", "李宁 赤兔"),
-            Map.entry("跑鞋", "跑步鞋"),
-            Map.entry("始祖鸟", "始祖鸟 Arc'teryx")
-    );
-
-    /** 意图干扰词与停用词过滤集合（避免“查库存/多少钱/有货吗”等用户口语污染微服务切词导致匹配落空） */
-    private static final java.util.Set<String> STOP_WORDS = java.util.Set.of(
-            "库存", "还有多少", "多少", "还有", "有货吗", "有货", "有吗", "多少钱", "价格", "怎么样", "推荐", "正品", "买", "想买", "一双", "一台", "一个", "一部"
-    );
-
     /**
-     * 智能切词与别名归一化：
-     * 1. 自动映射常见电商数码别名（如 果15 -> 苹果 15，米14 -> 小米 14）
-     * 2. 在中文字符与字母/数字交界处自动补全切词（如 "苹果15" -> ["苹果", "15"]）
-     */
-    private List<String> extractSearchTokens(String keyword) {
-        if (!StringUtils.hasText(keyword)) {
-            return Collections.emptyList();
-        }
-        String clean = keyword.trim().toLowerCase();
-        for (Map.Entry<String, String> entry : ALIAS_MAP.entrySet()) {
-            if (clean.contains(entry.getKey())) {
-                clean = clean.replace(entry.getKey(), entry.getValue());
-            }
-        }
-        // 清理由于别名替换可能产生的连续重复品牌词（例如“李宁李宁”、“苹果苹果”、“小米小米”）
-        clean = clean.replaceAll("(李宁|苹果|小米|华为|罗技|回力)\\s*\\1+", "$1 ");
-        
-        // 在中英文、中文字符与数字交界处增加空格切词，例如 "苹果15" -> "苹果 15", "李宁6" -> "李宁 6"
-        clean = clean.replaceAll("([\\u4e00-\\u9fa5])([a-zA-Z0-9])", "$1 $2")
-                     .replaceAll("([a-zA-Z0-9])([\\u4e00-\\u9fa5])", "$1 $2");
-
-        String[] parts = clean.split("[\\s,，+、]+");
-        List<String> tokens = new ArrayList<>();
-        for (String p : parts) {
-            if (StringUtils.hasText(p) && !p.isBlank()) {
-                String token = p.trim();
-                if (!STOP_WORDS.contains(token)) {
-                    tokens.add(token);
-                }
-            }
-        }
-        return tokens;
-    }
-
-    /**
-     * 搜索商品列表（支持关键词模糊搜索与最高价格限制，供 AI 导购与前端商城调用）
+     * 搜索商品列表（支持型号消歧、分词归一化与 Redis 实时库存叠加，供前台商城与 AI 导购共用）
      */
     public List<Product> search(String keyword, double maxPrice) {
-        LambdaQueryWrapper<Product> wrapper = new LambdaQueryWrapper<Product>()
-                .eq(Product::getStatus, 1); // 仅查询上架商品
+        String query = ProductSearchTerms.normalize(keyword);
+        var model = ProductSearchTerms.model(query);
+        var wrapper = listedProducts(maxPrice);
+        if (model != null) {
+            // 按品类缩窄候选集后再按归一化型号精确过滤，避免 Pro/Pro Max 与基础款混淆
+            wrapper.in(Product::getCategory, model.scope().categories());
+            return withAvailableStock(productMapper.selectList(wrapper.orderByDesc(Product::getId)).stream()
+                    .filter(product -> model.equals(ProductSearchTerms.model(product.getName())))
+                    .toList());
+        }
 
-        if (StringUtils.hasText(keyword)) {
-            String trimmed = keyword.trim();
-            List<String> tokens = extractSearchTokens(trimmed);
-
+        if (!query.isBlank()) {
+            List<String> tokens = ProductSearchTerms.tokens(query);
             wrapper.and(outer -> {
-                // 1. 全词模糊命中（最高优先级）
-                outer.like(Product::getName, trimmed)
-                        .or().like(Product::getDescription, trimmed)
-                        .or().like(Product::getCategory, trimmed);
-
-                // 2. 多词协同命中：所有有效切词同时命中商品名或描述（如 "李宁" AND "赤兔" AND "6"）
+                searchText(outer, query);
                 if (!tokens.isEmpty()) {
-                    outer.or(andGroup -> {
-                        for (String token : tokens) {
-                            andGroup.and(w -> w.like(Product::getName, token)
-                                    .or().like(Product::getDescription, token)
-                                    .or().like(Product::getCategory, token));
-                        }
-                    });
+                    outer.or(andGroup -> tokens.forEach(token -> andGroup.and(term -> searchText(term, token))));
                 }
             });
         }
 
-        if (maxPrice > 0) {
-            wrapper.le(Product::getPrice, BigDecimal.valueOf(maxPrice));
+        return withAvailableStock(productMapper.selectList(wrapper.orderByDesc(Product::getId)));
+    }
+
+    public List<Product> search(String keyword, double maxPrice, String requestText) {
+        return search(ProductSearchTerms.modelKeyword(keyword, requestText), maxPrice);
+    }
+
+    public Discovery discover(String keyword, double maxPrice, String requestText) {
+        keyword = ProductSearchTerms.modelKeyword(keyword, requestText);
+        boolean exactModel = ProductSearchTerms.model(keyword) != null;
+        List<Product> matches = search(keyword, exactModel ? 0 : maxPrice);
+        ProductSearchTerms.Scope scope = ProductSearchTerms.scope(keyword);
+        if (scope == null && !matches.isEmpty()) {
+            scope = ProductSearchTerms.scope(matches.get(0).getName());
+        }
+        if (scope == null) {
+            List<String> categories = matches.stream().map(Product::getCategory).filter(Objects::nonNull).distinct().toList();
+            if (categories.size() != 1) {
+                return new Discovery(matches, List.of());
+            }
+            scope = new ProductSearchTerms.Scope(categories, List.of());
         }
 
-        wrapper.orderByDesc(Product::getId);
-        return productMapper.selectList(wrapper);
+        var alternatives = listedProducts(maxPrice)
+                .in(Product::getCategory, scope.categories())
+                .gt(Product::getStock, 0);
+        List<String> names = scope.names();
+        if (!names.isEmpty()) {
+            alternatives.and(group -> names.forEach(name -> group.or().like(Product::getName, name)));
+        }
+        if (!matches.isEmpty()) {
+            alternatives.notIn(Product::getId, matches.stream().map(Product::getId).toList());
+            matches.stream().map(Product::getPrice).min(BigDecimal::compareTo)
+                    .ifPresent(price -> alternatives.le(Product::getPrice, price));
+        }
+        List<Product> available = withAvailableStock(productMapper.selectList(alternatives
+                .orderByAsc(Product::getPrice, Product::getId).last("LIMIT 60")));
+        return new Discovery(matches, available.stream()
+                .filter(product -> product.getStock() != null && product.getStock() > 0).limit(6).toList());
     }
+
+    private LambdaQueryWrapper<Product> listedProducts(double maxPrice) {
+        var query = new LambdaQueryWrapper<Product>().eq(Product::getStatus, 1);
+        if (Double.isFinite(maxPrice) && maxPrice > 0) {
+            query.le(Product::getPrice, BigDecimal.valueOf(maxPrice));
+        }
+        return query;
+    }
+
+    private void searchText(LambdaQueryWrapper<Product> query, String text) {
+        query.like(Product::getName, text).or().like(Product::getDescription, text).or().like(Product::getCategory, text);
+    }
+
+    private List<Product> withAvailableStock(List<Product> products) {
+        if (products.isEmpty()) {
+            return products;
+        }
+        try {
+            List<String> counts = redisTemplate.opsForValue().multiGet(products.stream()
+                    .map(product -> STOCK_COUNT_PREFIX + product.getId()).toList());
+            if (counts != null && counts.size() == products.size()) {
+                for (int i = 0; i < products.size(); i++) {
+                    String count = counts.get(i);
+                    if (count != null) {
+                        products.get(i).setStock(Integer.parseInt(count));
+                    }
+                }
+            }
+        } catch (org.springframework.dao.DataAccessException | NumberFormatException ex) {
+            log.warn("读取可售库存失败，保留已持久化的商品库存: {}", ex.getMessage());
+        }
+        return products;
+    }
+
+    public record Discovery(List<Product> matches, List<Product> alternatives) {}
 
     /**
      * 查询商品详情（工业级 Redis 缓存三防体系：防穿透 + 防击穿 + 防雪崩）

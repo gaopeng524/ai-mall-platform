@@ -40,6 +40,8 @@ public class AiToolExecutionContext {
         @Builder.Default
         private final java.util.concurrent.atomic.AtomicInteger toolExecutionCount = new java.util.concurrent.atomic.AtomicInteger(0);
         @Builder.Default
+        private final java.util.concurrent.atomic.AtomicInteger productSearchCount = new java.util.concurrent.atomic.AtomicInteger();
+        @Builder.Default
         private final java.util.concurrent.atomic.AtomicInteger consecutiveNotFoundCount = new java.util.concurrent.atomic.AtomicInteger(0);
         /** 单次提问（单轮 Turn）内商品服务是否已触发 Sentinel 429 限流（该标记随本轮回答结束 clear() 自动销毁，不影响下一句提问） */
         @Builder.Default
@@ -420,6 +422,12 @@ public class AiToolExecutionContext {
     public static List<String> getExecutedTools() {
         SessionContext ctx = getActiveContext();
         return ctx != null ? new ArrayList<>(ctx.getExecutedTools()) : Collections.emptyList();
+    }
+
+    /** 限制单轮对话最多发起两次实际商品查询，防止大模型无效循环重试 */
+    public static boolean tryProductSearch() {
+        SessionContext ctx = getActiveContext();
+        return ctx == null || ctx.getProductSearchCount().incrementAndGet() <= 2;
     }
 
     /**

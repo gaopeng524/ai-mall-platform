@@ -10,6 +10,7 @@ export interface Product {
   specs?: Record<string, string>;
   isSeckill?: boolean;
   originalPrice?: number;
+  searchMatch?: 'alternative';
 }
 
 export interface User {

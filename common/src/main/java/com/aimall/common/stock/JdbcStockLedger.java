@@ -52,7 +52,7 @@ public class JdbcStockLedger {
                     "SELECT status FROM stock_deduct_batch_log WHERE batch_no = ? AND product_id = ?",
                     String.class, request.batchNo(), item.productId());
             if (!existing.isEmpty()) {
-                results.add(new BatchStockDeductResult.ItemResult(item.productId(), item.quantity(), existing.getFirst(), true));
+                results.add(new BatchStockDeductResult.ItemResult(item.productId(), item.quantity(), existing.get(0), true));
                 continue;
             }
 

@@ -43,6 +43,24 @@ public final class QueryIntentClassifier {
             "推荐|对比|比较|平替|对标|买哪个|哪款好|性价比|好用吗|怎么选|值得买吗|有没有.*(推荐|平替|好物)"
     );
 
+    private static final String ALTERNATIVE_TERMS = "平替|替代款|替代品|替代商品|对标款|同类替代";
+    private static final Pattern ALTERNATIVE = Pattern.compile(ALTERNATIVE_TERMS);
+    private static final Pattern DECLINE_ALTERNATIVE = Pattern.compile(
+            "(?:不要|不考虑|不接受|不需要|无需|不用)\\s*(?:推荐)?\\s*(?:" + ALTERNATIVE_TERMS + ")");
+    private static final Pattern LIVE_CATALOG = Pattern.compile(
+            "价格|多少钱|卖多少|售价|预算|在售|有卖|上架|\\p{Nd}|iphone|ipad", Pattern.CASE_INSENSITIVE);
+
+    /** 是否明确要求推荐同品类平替商品 */
+    public static boolean requestsAlternatives(String query) {
+        return query != null && ALTERNATIVE.matcher(query).find() && !DECLINE_ALTERNATIVE.matcher(query).find();
+    }
+
+    /** 是否依赖实时在售商品价格、型号或库存，不应走静态语义缓存 */
+    public static boolean requiresFreshProductResults(String query) {
+        return query != null && (requestsAlternatives(query) || isRecommendOrCompare(query)
+                || LIVE_CATALOG.matcher(query).find());
+    }
+
     /**
      * 是否为交易类 / 个人数据类问句（这类问句禁止读写问句缓存）
      */
