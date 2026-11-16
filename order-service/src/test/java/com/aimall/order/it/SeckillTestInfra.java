@@ -102,10 +102,12 @@ public final class SeckillTestInfra {
 
         // RocketMQ：namesrv + broker 跑在同一个容器里。broker 会把 brokerIP1:10911 注册到 namesrv，
         // 客户端直接按这个地址连 broker，所以这里用固定端口映射 + brokerIP1=127.0.0.1。
-        GenericContainer<?> rocketmq = new GenericContainer<>(DockerImageName.parse("apache/rocketmq:5.2.0"))
+        // 默认用 4.9.6：与 docker-compose 生产部署的 broker 版本一致；可用 TEST_ROCKETMQ_VERSION 覆盖。
+        String rmqVersion = System.getenv().getOrDefault("TEST_ROCKETMQ_VERSION", "4.9.6");
+        GenericContainer<?> rocketmq = new GenericContainer<>(DockerImageName.parse("apache/rocketmq:" + rmqVersion))
                 .withCopyToContainer(MountableFile.forClasspathResource("rocketmq/broker.conf"), "/home/rocketmq/broker.conf")
                 .withCommand("sh", "-c", "./mqnamesrv & sleep 3 && ./mqbroker -n 127.0.0.1:9876 -c /home/rocketmq/broker.conf")
-                .withWorkingDirectory("/home/rocketmq/rocketmq-5.2.0/bin")
+                .withWorkingDirectory("/home/rocketmq/rocketmq-" + rmqVersion + "/bin")
                 .withEnv("JAVA_OPT_EXT", "-Xms256m -Xmx512m")
                 .withCreateContainerCmdModifier(cmd -> cmd.getHostConfig().withPortBindings(
                         com.github.dockerjava.api.model.PortBinding.parse("9876:9876"),

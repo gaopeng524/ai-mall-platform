@@ -40,7 +40,8 @@ common                     公共模块（Result/ErrorCode、JwtUtil、UserConte
 - **入口极速准入**：通过 **Redis Lua** 原子完成 500ms 短时防抖与库存预扣，结合 `Semaphore(5000)` 在途背压限制与 **RocketMQ 异步削峰**，降低接口阻塞。
 - **MySQL 持久化扣库任务表（`stock_deduct_task`）**：消费端在同一个 MySQL 本地事务中写入 `orders` 与 `stock_deduct_task`（订单号唯一索引防重投）；`StockDeductWorker` 使用 `FOR UPDATE SKIP LOCKED` 批量领取、按商品聚合后调用 `product-service` `/batch-deduct-stock`，下游以 `stock_deduct_batch_log(batch_no, product_id)` 联合唯一键保证重试幂等（详见 [设计说明](docs/STOCK_DEDUCT_TASK_DESIGN.md)）。
 - **普通下单与超时关单闭环**：普通下单采用 RocketMQ 事务半消息（`NormalOrderTransactionListener`）保证扣库与建单一致性；超时未支付订单通过 RocketMQ 延迟消息 + 定时扫描 + CAS 状态校验安全关闭并区分扣库任务状态完成库存回补。
-- **历史压测基线与故障注入测试**：旧版内存聚合链路曾在单机 Docker 环境下使用 JMeter 发起 18 万次请求测得 **10,271.6 QPS、平均响应 48ms**；切换 `stock_deduct_task` 后已补充 MySQL + Redis + RocketMQ 故障注入集成测试（详见 [秒杀优化总结](SECKILL_OPTIMIZATION_SUMMARY.md) 与 [复测指南](docs/SECKILL_RETEST_GUIDE.md)）。
+- **压测与故障注入（当前版本，2026-11）**：单机 JMeter 600 线程 × 18 万次秒杀请求，入口 **10,302 QPS、平均 52.5ms、P99 87ms**；约 14.2% 请求被 Semaphore(5000) 背压拒绝（JMeter 带业务断言统计，无超时、无 5xx），成功下单 154,493 单，Redis 库存、MySQL 库存、订单、扣库任务四方对账零差异，MySQL 库存在压测结束后约 140 秒追平。扣库 worker 崩溃恢复与消息重复投递由 9 个 MySQL + Redis + RocketMQ 集成测试覆盖（详见 [秒杀优化总结](SECKILL_OPTIMIZATION_SUMMARY.md) 与 [复测指南](docs/SECKILL_RETEST_GUIDE.md)）。
+  - 历史数据：旧版内存聚合链路曾测得 10,271.6 QPS、平均 48ms、"0% 报错"，该次压测**没有响应断言**，被背压拒绝的请求也计为成功，与当前错误率口径不同；运行环境也不同（旧：Docker WSL2；新：本机 jar），QPS 只能粗略对比。
 
 ### 2. AI 多模态导购 Agent 与交易护栏
 - **9 个业务 Tool Calling 工具**：支持 `searchProducts`、`getProductDetail`、`createOrder`、`getUserOrders`、`getOrderDetail`、`cancelOrder`、`addToCart`、`getCartList`、`checkoutCart`（[MallTools.java](ai-service/src/main/java/com/aimall/ai/tool/MallTools.java)），并集成 Sentinel 降级保护。

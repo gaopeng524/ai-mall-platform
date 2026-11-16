@@ -1,9 +1,12 @@
 # AI 商城高并发秒杀架构演进与压测实战总结（全景复盘）
 
-> **2026-11 更新**：本文压测数据基于"内存聚合 BatchStockDeductBuffer"版本。该组件已替换为扣库任务表方案（见 [docs/STOCK_DEDUCT_TASK_DESIGN.md](docs/STOCK_DEDUCT_TASK_DESIGN.md)），秒杀入口代码未改动，新版本的 QPS / 平均响应时间需按 [docs/SECKILL_RETEST_GUIDE.md](docs/SECKILL_RETEST_GUIDE.md) 重新压测后更新。
-
-> **最新实测成果**：  
-> 在单机 Windows 11 + Docker WSL2 虚拟化环境下，承载 **180,000 笔** 极速并发下单冲击，达成 **10,271.6 QPS、0.00% 报错、平均响应 48ms、长尾延迟 < 196ms、CPU 仅占用 ~30%、GC 活动 0.0%** 的卓越工业级战绩。
+> **最新实测（2026-11，扣库任务表版本，见阶段 6）**：  
+> 单机 Windows 11，4 个服务以本机 jar 运行（-Xmx1g），JMeter 同机 600 线程 × 18 万次请求：
+> **10,302.2 QPS、平均 52.5ms、中位数 41ms、P90/P95/P99 = 69/75/87ms、最大 269ms**；
+> 错误率 **14.2%（25,507 次，全部为 Semaphore(5000) 背压拒绝"秒杀排队过于火爆"，无超时、无 5xx）**。
+> 成功下单 154,493 单，Redis 库存、MySQL 库存、订单、扣库任务四方对账零差异，MySQL 库存在压测结束后约 140 秒追平。
+>
+> **口径说明**：下文阶段 1~5 的数据为历史记录。阶段 5 的"0.00% 报错"测试时 JMeter **没有响应断言**，HTTP 200 但业务失败（被背压拒绝）的请求也算成功，与阶段 6 的错误率口径不同；阶段 5 运行在 Docker WSL2 中，阶段 6 为本机 jar，环境不同，QPS 只能粗略对比。
 
 ---
 
@@ -15,7 +18,8 @@
 | **阶段 2：初级缓存化** | Redis 分布式锁 + OpenFeign 同步 RPC | **1,523.0 QPS** | 130 ms | 0.00% | 跨服务网络往返耗时长、MySQL 依然承接高并发写、22笔分布式漏单 |
 | **阶段 3：异步削峰** | Redis 扣减 + RocketMQ 同步发送 (400线程) | **8,470.1 QPS** | 43 ms | 0.00% | 初步达成纯异步，但下游行锁死锁与超时关单未闭环 |
 | **阶段 4：业务闭环** | Super Lua + 延迟关单巡检 + 批量扣减 (600线程) | **8,107.7 QPS** | 65 ms | 0.00% | 100% 账目精准对账，但主链路等待 Broker ACK 受限于虚拟网卡 |
-| **阶段 5：破万冲刺** | **asyncSend 异步化 + Semaphore(5000) 背压护栏** | **10,271.6 QPS** | **48 ms** | **0.00%** | **彻底解放 Tomcat 线程，长尾延迟暴降 30 倍（6115ms -> 196ms），稳健破万！** |
+| **阶段 5：破万冲刺** | **asyncSend 异步化 + Semaphore(5000) 背压护栏** | **10,271.6 QPS** | **48 ms** | 0.00%（无响应断言） | **彻底解放 Tomcat 线程，长尾延迟暴降 30 倍（6115ms -> 196ms），稳健破万！** |
+| **阶段 6：可靠扣库** | **扣库任务表 stock_deduct_task（同事务落库 + SKIP LOCKED 批量领取 + 批次号幂等）**，入口不变 | **10,302.2 QPS** | **52.5 ms**（P99 87 ms） | 14.2%（带断言，全部为背压拒绝） | 进程崩溃不丢扣减、重试不重复扣减；四方对账零差异，库存约 140s 追平 |
 
 ---
 
@@ -35,9 +39,9 @@ flowchart TD
     AsyncMQ -.-> Broker[("RocketMQ Broker (4.9.6)")]
     Broker -.-> OrderConsumer["6. OrderConsumer (32并发线程)"]
     
-    OrderConsumer --> MySQLOrder[("MySQL orders 订单表 (平滑落库)")]
-    OrderConsumer --> Buffer["7. BatchStockDeductBuffer<br>内存 LongAdder 分段合并扣减"]
-    Buffer --> MySQLStock[("MySQL products (批量 UPDATE)")]
+    OrderConsumer --> MySQLOrder[("MySQL orders + stock_deduct_task<br>(同一本地事务)")]
+    MySQLOrder --> Worker["7. StockDeductWorker<br>SKIP LOCKED 批量领取 + 按商品合并"]
+    Worker --> MySQLStock[("MySQL products<br>按批次号幂等批量扣减")]
     OrderConsumer --> DelayMQ["8. 10s 延迟关单消息"]
     DelayMQ -.-> TimeoutConsumer["9. OrderTimeoutConsumer<br>CAS 关单 + 双向回滚 (MySQL+Redis)"]
 ```
@@ -50,9 +54,10 @@ flowchart TD
 - **痛点**：原本先执行一次 Redis SETNX 做 500ms 快速防抖，再执行一次 Decr 扣库存，产生了 2 次独立的网络 RTT。
 - **解法**：编写合并版 **Super Lua** 脚本，单次原子脚本中同时完成防重校验与内存库存扣减，Redis 网络交互减半，免去连接池开销。
 
-### 突破 3：内存聚合批量扣减缓冲（消除数据库行锁竞争）
+### 突破 3：批量合并扣减（消除数据库行锁竞争）→ 演进为扣库任务表
 - **痛点**：后台 32 个消费者同时并发执行 `UPDATE products SET stock = stock - 1 WHERE id = ?`，全挤在 MySQL 同一行排他锁上，导致数据库卡死。
-- **解法**：自主设计 `BatchStockDeductBuffer`，使用 `ConcurrentHashMap<Long, LongAdder>` 在内存中累加扣减额，每 200ms 或达到 50 件时单次批量下刷，锁冲突降低 50 倍以上。
+- **初版解法（已下线）**：`BatchStockDeductBuffer` 用 `ConcurrentHashMap<Long, LongAdder>` 在内存中累加扣减额，每 200ms 批量下刷。问题是扣减量只存在内存里：进程崩溃会丢扣减，远程调用超时重试会重复扣。
+- **现行方案**：扣库任务表 `stock_deduct_task`。订单与任务同事务落库；worker 用 `FOR UPDATE SKIP LOCKED` 批量领取、按商品合并后一次 UPDATE；商品库按 `(batch_no, product_id)` 幂等；处理中超时的批次沿用原批次号整批重领。详见 [docs/STOCK_DEDUCT_TASK_DESIGN.md](docs/STOCK_DEDUCT_TASK_DESIGN.md)。
 
 ### 突破 4：柔性事务与延时关单（精准对账与库存回滚）
 - **痛点**：秒杀订单需要 10 秒未支付自动关单并恢复库存，传统定时轮询扫表对数据库压力巨大。
@@ -83,7 +88,7 @@ flowchart TD
 | :--- | :--- | :--- |
 | **秒杀下单服务** | [`order-service/.../OrderService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/service/OrderService.java) | Super Lua + asyncSend + Semaphore(5000) 背压 + 定时对账兜底 |
 | **异步落库消费者** | [`order-service/.../OrderConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderConsumer.java) | 32 消费线程并发入库 + 投递 10s 延迟关单消息 |
-| **批量扣减缓冲池** | [`order-service/.../BatchStockDeductBuffer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/BatchStockDeductBuffer.java) | LongAdder 分段累加，200ms 定时下刷 MySQL |
+| **扣库任务 worker** | [`order-service/.../StockDeductWorker.java`](order-service/src/main/java/com/aimall/order/stock/StockDeductWorker.java) | SKIP LOCKED 批量领取、按商品合并、批次号幂等、超时整批重领 |
 | **超时关单消费者** | [`order-service/.../OrderTimeoutConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderTimeoutConsumer.java) | CAS 状态校验 + Redis/MySQL 双向库存回滚 |
 | **服务配置** | [`order-service/.../application.yml`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/resources/application.yml) | Tomcat 1000 线程池、RocketMQ 延迟级别 3 (10s) |
 
@@ -139,3 +144,11 @@ public void scanAndCloseTimeoutOrders() {
 ```
 **落地成效**：
 服务重启后，后台定时巡检任务自动扫描到超时的 30 笔漏网订单，批量完成 CAS 关单与库存回滚，数据库库存**自动无缝回正为 200,000**，达成分布式系统 **100% 自动化最终一致性闭环**。
+
+---
+
+## 附：阶段 6 压测中观察到的已知问题（待优化）
+
+* **超时关单吞吐偏低**：154,493 笔待支付订单从压测结束到全部关单约 15 分钟（< 200 单/秒）。期间日志出现
+  `broker busy (TIMEOUT_CLEAN_QUEUE)` 与"延迟关单注册失败"，订单最终靠定时扫描兜底全部关闭，对账无差异。
+  该现象与扣库任务表无关（关单链路未改动），后续可从关单消费并发、延迟消息发送重试、扫描批量化三方面优化。
