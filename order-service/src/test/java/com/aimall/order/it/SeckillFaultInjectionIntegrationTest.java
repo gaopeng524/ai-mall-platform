@@ -1,5 +1,6 @@
 package com.aimall.order.it;
 
+import com.aimall.common.trace.TraceContext;
 import com.aimall.order.cache.ProductCaffeineCacheService;
 import com.aimall.order.it.JdbcProductRemoteClientStub.Fault;
 import com.aimall.order.it.JdbcProductRemoteClientStub.SimulatedCrash;
@@ -112,6 +113,17 @@ class SeckillFaultInjectionIntegrationTest {
     }
 
     /**
+     * 本轮测试产生的消息都带这个 traceId 前缀。测试消费组是新建的，如果连到一个有积压消息的 RocketMQ
+     * （例如开发环境），它会从头消费旧消息；只处理带本轮前缀的消息，其余直接确认丢弃，避免污染测试库。
+     */
+    static final String RUN_TRACE_PREFIX = "it" + Long.toHexString(System.nanoTime()) + "-";
+
+    /** 让当前线程之后发出的订单消息带上本轮测试的 traceId */
+    static void tagThread() {
+        TraceContext.setTraceId(RUN_TRACE_PREFIX + TraceContext.generateTraceId());
+    }
+
+    /**
      * 生产代码 OrderConsumer 的计数版本：统计实际投递次数，并可模拟"落库成功但 ACK 丢失"，让 broker 重投。
      */
     @RocketMQMessageListener(topic = "seckill-order-topic", consumerGroup = "it-seckill-order-consumer-group",
@@ -125,8 +137,14 @@ class SeckillFaultInjectionIntegrationTest {
             super(orderMapper, repo, tx, rocketMQTemplate);
         }
 
+        final AtomicInteger foreignSkipped = new AtomicInteger();
+
         @Override
         public void onMessage(OrderCreateMessage message) {
+            if (message.getTraceId() == null || !message.getTraceId().startsWith(RUN_TRACE_PREFIX)) {
+                foreignSkipped.incrementAndGet(); // 不是本轮测试产生的消息（环境里的积压），忽略
+                return;
+            }
             deliveries.computeIfAbsent(message.getOrderNo(), k -> new AtomicInteger()).incrementAndGet();
             super.onMessage(message);
             if (ackLossOnce.remove(message.getOrderNo())) {
@@ -151,8 +169,16 @@ class SeckillFaultInjectionIntegrationTest {
 
     private JdbcTemplate productJdbc;
 
+    @AfterEach
+    void reportForeignMessages() {
+        if (consumer.foreignSkipped.get() > 0) {
+            System.out.println("[IT] 已忽略非本轮测试的积压消息: " + consumer.foreignSkipped.get() + " 条");
+        }
+    }
+
     @BeforeEach
     void setUp() {
+        tagThread();
         productJdbc = new JdbcTemplate(infra.dataSource(SeckillTestInfra.PRODUCT_DB));
         product.clearFault();
     }
@@ -267,6 +293,7 @@ class SeckillFaultInjectionIntegrationTest {
         List<Future<String>> fs = new ArrayList<>();
         for (int i = 0; i < 8; i++) {
             fs.add(pool.submit(() -> {
+                tagThread();
                 go.await();
                 return orderService.createSeckillOrder(pid, 2, user, requestId);
             }));
@@ -300,7 +327,8 @@ class SeckillFaultInjectionIntegrationTest {
         OrderCreateMessage dup = OrderCreateMessage.builder()
                 .orderNo(orderNo).userId(70_001L).productId(pid).productName(String.valueOf(p.get("name")))
                 .price((BigDecimal) p.get("price")).quantity(3)
-                .totalAmount(((BigDecimal) p.get("price")).multiply(BigDecimal.valueOf(3))).build();
+                .totalAmount(((BigDecimal) p.get("price")).multiply(BigDecimal.valueOf(3)))
+                .traceId(TraceContext.getTraceId()).build();
         rocketMQTemplate.syncSend("seckill-order-topic", dup, 3000);
         rocketMQTemplate.syncSend("seckill-order-topic", dup, 3000);
 

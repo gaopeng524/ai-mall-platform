@@ -50,6 +50,15 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Testcontainers：必须放在 Spring Boot BOM 之前才能覆盖它管理的 1.19.x。
+                 新版 Docker Engine 提高了最低 API 版本，1.19.x 会误判"没有 Docker"，1.21.4 起兼容 -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.21.4</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- Spring Boot -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
