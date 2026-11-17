@@ -25,6 +25,7 @@ import java.time.Duration;
 public class AiChatController {
 
     private final AiShoppingService aiShoppingService;
+    private final com.aimall.ai.service.OrderDraftConfirmService orderDraftConfirmService;
     private final com.aimall.ai.context.RedisFallbackManager redisFallbackManager;
 
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
@@ -98,7 +99,7 @@ public class AiChatController {
         if (confirmToken == null || confirmToken.isBlank()) {
             return Result.fail("缺少确认凭据 confirmToken");
         }
-        return aiShoppingService.confirmOrderDraft(confirmToken.trim(), effectiveUserId);
+        return orderDraftConfirmService.confirmOrderDraft(confirmToken.trim(), effectiveUserId);
     }
 
     /**

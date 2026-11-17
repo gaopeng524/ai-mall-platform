@@ -130,9 +130,7 @@ class OrderHitlAndTokenUsageTest {
 
     @Test
     void shouldValidateAndCommitDraftInAiShoppingService() throws Exception {
-        AiShoppingService service = new AiShoppingService(
-                null, productFeignClient, orderFeignClient, null, null, objectMapper, null, redisFallbackManager, null
-        );
+        OrderDraftConfirmService service = new OrderDraftConfirmService(productFeignClient, orderFeignClient, redisFallbackManager, objectMapper);
 
         String confirmToken = "CONFIRM_TEST_TOKEN_123";
         OrderConfirmDraft draft = new OrderConfirmDraft(
