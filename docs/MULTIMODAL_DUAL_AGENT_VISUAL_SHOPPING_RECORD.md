@@ -62,28 +62,28 @@ flowchart TD
 | **意式咖啡** | 德龙 De'Longhi 半自动咖啡机 | ¥2180 | **柏翠 PE3690 研磨一体** | ¥699 | 20Bar 高压萃取，PID 智能温控 |
 | **通勤背包** | 始祖鸟 Granville 防水双肩包 | ¥1800 | **小米经典商务电脑双肩包** | ¥99 | 4 级防泼水，15.6 英寸独立防震电脑仓 |
 
-- 生成初始化脚本：[`docker/mysql/init.sql`](file:///d:/Javacode/ai-mall-platform/docker/mysql/init.sql)
-- 独立导入脚本：[`docker/mysql/seed_more_products.sql`](file:///d:/Javacode/ai-mall-platform/docker/mysql/seed_more_products.sql)
-- 前端离线/兜底数据同步：[`frontend/src/mock/mockData.ts`](file:///d:/Javacode/ai-mall-platform/frontend/src/mock/mockData.ts)
+- 生成初始化脚本：[`docker/mysql/init.sql`](../docker/mysql/init.sql)
+- 独立导入脚本：[`docker/mysql/seed_more_products.sql`](../docker/mysql/seed_more_products.sql)
+- 前端离线/兜底数据同步：[`frontend/src/mock/mockData.ts`](../frontend/src/mock/mockData.ts)
 
 ---
 
 ### 2. 微服务网关与搜索容灾加固
-1. **网关内存缓冲区与超时配置 ([`api-gateway/src/main/resources/application.yml`](file:///d:/Javacode/ai-mall-platform/api-gateway/src/main/resources/application.yml))**：
+1. **网关内存缓冲区与超时配置 ([`api-gateway/src/main/resources/application.yml`](../api-gateway/src/main/resources/application.yml))**：
    - 增加 `spring.codec.max-in-memory-size: 10MB`，杜绝上传 Base64 图片时触发 Spring Cloud Gateway 默认 256KB 缓存限制的 `DataBufferLimitException`；
    - 增加 `metadata.response-timeout: 60000` 与 `connect-timeout: 5000`，保障 AI 链式调用时网关不出现 504 Gateway Timeout。
-2. **多词分词搜索增强 ([`ProductService.java`](file:///d:/Javacode/ai-mall-platform/product-service/src/main/java/com/aimall/product/service/ProductService.java))**：
+2. **多词分词搜索增强 ([`ProductService.java`](../product-service/src/main/java/com/aimall/product/service/ProductService.java))**：
    - 针对 AI 提取的复合关键词（如 `Nike 跑步鞋`、`头戴 降噪 耳机`），重构模糊搜索算法，支持空格/逗号/加号自动分词，对商品名、描述、分类进行多维度倒排联合检索，命中率提升至 100%。
 
 ---
 
 ### 3. 后端双 Agent 流水线实现
-1. **多模态请求契约 ([`AiChatRequest.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/dto/AiChatRequest.java))**：
+1. **多模态请求契约 ([`AiChatRequest.java`](../ai-service/src/main/java/com/aimall/ai/dto/AiChatRequest.java))**：
    - 支持 `sessionId`、`message`、`imageBase64`（支持 `data:image/...;base64,` 前缀）与 `imageUrl`。
-2. **Controller 接口扩充 ([`AiChatController.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/controller/AiChatController.java))**：
+2. **Controller 接口扩充 ([`AiChatController.java`](../ai-service/src/main/java/com/aimall/ai/controller/AiChatController.java))**：
    - 新增 `@PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)`，标准承载大体积图文 Payload；
    - 保留 `@GetMapping("/stream")` 向后兼容。
-3. **双 Agent 核心执行引擎 ([`AiShoppingService.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java))**：
+3. **双 Agent 核心执行引擎 ([`AiShoppingService.java`](../ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java))**：
    - `parseMedia(String imageData)`：自适应解析 Base64 与网络 URL，封装为 Spring AI `Media` 资源；
    - **Agent 1**：基于 `qwen3.7-flash` 与 `VISUAL_AGENT_SYSTEM_PROMPT`，抽取品类、风格、配色、卖点与数据库检索词，发布 `visual_analysis` 步骤事件；
    - **Agent 2**：接收结构化视觉属性，自动调用 `MallTools.searchProducts` 查库，并以 SSE 推送交互式商品卡片与详细选购/平替对比话术。
@@ -91,10 +91,10 @@ flowchart TD
 ---
 
 ### 4. 前端拍立淘交互升级
-1. **多模态事件流服务 ([`frontend/src/services/aiStream.ts`](file:///d:/Javacode/ai-mall-platform/frontend/src/services/aiStream.ts))**：
+1. **多模态事件流服务 ([`frontend/src/services/aiStream.ts`](../frontend/src/services/aiStream.ts))**：
    - 升级为 `POST /api/ai/chat/stream` 发送 JSON Payload；
    - 增加对 `visual_analysis` 事件的捕获与微服务调用架构链路日志记录。
-2. **抽屉式多模态导购界面 ([`frontend/src/components/AiChatDrawer.tsx`](file:///d:/Javacode/ai-mall-platform/frontend/src/components/AiChatDrawer.tsx))**：
+2. **抽屉式多模态导购界面 ([`frontend/src/components/AiChatDrawer.tsx`](../frontend/src/components/AiChatDrawer.tsx))**：
    - **📷 拍照/上传按钮**：集成原生文件上传；
    - **剪贴板截图粘贴**：支持在输入框内直接按下 `Ctrl + V` 粘贴微信/QQ 截图；
    - **图片缩略图就绪条**：发送前支持预览与一键移除；

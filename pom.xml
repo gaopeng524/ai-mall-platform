@@ -20,7 +20,6 @@
         <module>order-service</module>
         <module>ai-service</module>
         <module>payment-service</module>
-        <!-- <module>knowledge-service</module> -->
     </modules>
 
     <properties>

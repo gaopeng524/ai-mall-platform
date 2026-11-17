@@ -22,7 +22,10 @@ public class FeignTraceInterceptor implements RequestInterceptor {
     @Override
     public void apply(RequestTemplate template) {
         // 0. 注入微服务内部 Feign RPC 专有凭证
-        template.header(InternalRpcSecurity.INTERNAL_TOKEN_HEADER, InternalRpcSecurity.INTERNAL_TOKEN_VALUE);
+        String internalToken = InternalRpcSecurity.currentToken();
+        if (internalToken != null) {
+            template.header(InternalRpcSecurity.INTERNAL_TOKEN_HEADER, internalToken);
+        }
 
         // 1. 全链路透传 TraceId
         String traceId = TraceContext.getTraceId();

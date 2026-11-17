@@ -36,8 +36,11 @@ public class UserController {
     }
 
     /** 内部接口：根据 ID 查用户（供其他服务 Feign 调用） */
+    /** 仅供其它微服务通过 Feign 调用：返回邮箱、手机号等信息，必须带内部调用凭证 */
     @GetMapping("/internal/{userId}")
-    public Result<UserDTO.UserInfo> getById(@PathVariable Long userId) {
+    public Result<UserDTO.UserInfo> getById(@PathVariable Long userId,
+                                            jakarta.servlet.http.HttpServletRequest request) {
+        com.aimall.common.security.InternalRpcSecurity.requireInternalRpc(request);
         return Result.success(userService.getUserInfo(userId));
     }
 }

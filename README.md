@@ -59,9 +59,9 @@ docker-compose up -d
 包含 Nacos (`8848`)、MySQL (`3306`)、PostgreSQL pgvector (`5432`)、Redis (`6379`)、Sentinel (`8858`)、RocketMQ NameSrv/Broker (`9876`) 及前端 Nginx (`3000`)。
 
 ### 2. 配置环境变量并启动后端微服务
-在运行环境设置大模型与安全环境变量（或在各服务 `application.yml` 中配置默认值）：
+在运行环境设置大模型与安全环境变量（建议设为系统环境变量，或写入 `.env`）：
 - `DASHSCOPE_API_KEY`：阿里云百炼 API Key（默认聊天模型 `qwen3.8-flash`、向量模型 `text-embedding-v3`）
-- `JWT_SECRET`：各微服务共享的至少 32 字节 JWT 密钥
+- `JWT_SECRET`：**必填**，各微服务共享的至少 32 字节 JWT 密钥（`openssl rand -base64 48` 生成）。仓库不提供默认值，未设置时网关和各服务启动失败；服务间内部调用凭证由它自动派生
 
 使用 Java 17 构建整个多模块工程并运行离线单元测试：
 ```bash

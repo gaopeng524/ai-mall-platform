@@ -88,7 +88,7 @@ mybatis-plus:
     map-underscore-to-camel-case: true
 
 jwt:
-  secret: ${JWT_SECRET:aimall-platform-secret-key-must-be-32-bytes!}
+  secret: ${JWT_SECRET:}   # 必填：至少 32 字节，所有服务一致；未配置时启动失败（见 .env.example）
 
 deepseek:
   api-key: ${DEEPSEEK_API_KEY:}

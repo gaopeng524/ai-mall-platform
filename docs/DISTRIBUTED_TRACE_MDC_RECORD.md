@@ -30,19 +30,19 @@
 ## 二、 核心实现清单
 
 ### 1. `common` 公共基础包
-- [`TraceConstant.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/TraceConstant.java): 定义 `X-Trace-Id`、`traceId` 和 MQ 属性常量。
-- [`TraceContext.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/TraceContext.java): 封装 `MDC` 获取、设置、自增初始化与清理工具。
-- [`TraceIdFilter.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/TraceIdFilter.java): Servlet 最高优先级 WebFilter，自动拦截注入与 `finally` 清理。
-- [`FeignTraceInterceptor.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java): OpenFeign 跨微服务透传拦截器。
-- [`MdcTaskDecorator.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/MdcTaskDecorator.java): Spring 异步线程池上下文传递装饰器。
+- [`TraceConstant.java`](../common/src/main/java/com/aimall/common/trace/TraceConstant.java): 定义 `X-Trace-Id`、`traceId` 和 MQ 属性常量。
+- [`TraceContext.java`](../common/src/main/java/com/aimall/common/trace/TraceContext.java): 封装 `MDC` 获取、设置、自增初始化与清理工具。
+- [`TraceIdFilter.java`](../common/src/main/java/com/aimall/common/trace/TraceIdFilter.java): Servlet 最高优先级 WebFilter，自动拦截注入与 `finally` 清理。
+- [`FeignTraceInterceptor.java`](../common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java): OpenFeign 跨微服务透传拦截器。
+- [`MdcTaskDecorator.java`](../common/src/main/java/com/aimall/common/trace/MdcTaskDecorator.java): Spring 异步线程池上下文传递装饰器。
 
 ### 2. `api-gateway` 网关发源地
-- [`TraceIdGlobalFilter.java`](file:///d:/Javacode/ai-mall-platform/api-gateway/src/main/java/com/aimall/gateway/filter/TraceIdGlobalFilter.java): 优先级 `-300`，作为请求入口第一站，生成 TraceId 并通过响应头回传前端。
+- [`TraceIdGlobalFilter.java`](../api-gateway/src/main/java/com/aimall/gateway/filter/TraceIdGlobalFilter.java): 优先级 `-300`，作为请求入口第一站，生成 TraceId 并通过响应头回传前端。
 
 ### 3. `order-service` RocketMQ 异步贯穿
-- [`OrderCreateMessage.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderCreateMessage.java): 增加 `traceId` 消息属性。
-- [`OrderTimeoutCancelMessage.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderTimeoutCancelMessage.java): 增加 `traceId` 延时属性。
-- [`OrderService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/service/OrderService.java): 下单发消息时注入当前 `TraceContext.getTraceId()`。
-- [`OrderConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderConsumer.java): 消费时自动还原 TraceId，保证 10,000 QPS 异步削峰批处理落库日志带有原始请求标识。
-- [`NormalOrderConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/NormalOrderConsumer.java): 2PC 事务消息消费时还原 TraceId。
-- [`OrderTimeoutConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderTimeoutConsumer.java): 5 分钟超时关单消费时依然持有最初下单的 TraceId。
+- [`OrderCreateMessage.java`](../order-service/src/main/java/com/aimall/order/mq/OrderCreateMessage.java): 增加 `traceId` 消息属性。
+- [`OrderTimeoutCancelMessage.java`](../order-service/src/main/java/com/aimall/order/mq/OrderTimeoutCancelMessage.java): 增加 `traceId` 延时属性。
+- [`OrderService.java`](../order-service/src/main/java/com/aimall/order/service/OrderService.java): 下单发消息时注入当前 `TraceContext.getTraceId()`。
+- [`OrderConsumer.java`](../order-service/src/main/java/com/aimall/order/mq/OrderConsumer.java): 消费时自动还原 TraceId，保证 10,000 QPS 异步削峰批处理落库日志带有原始请求标识。
+- [`NormalOrderConsumer.java`](../order-service/src/main/java/com/aimall/order/mq/NormalOrderConsumer.java): 2PC 事务消息消费时还原 TraceId。
+- [`OrderTimeoutConsumer.java`](../order-service/src/main/java/com/aimall/order/mq/OrderTimeoutConsumer.java): 5 分钟超时关单消费时依然持有最初下单的 TraceId。

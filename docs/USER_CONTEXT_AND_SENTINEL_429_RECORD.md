@@ -12,40 +12,40 @@
 
 1. **`UserContext` 全链路用户无感透传 (Task 2)**：
    - 网关校验 JWT 后自动通过请求头下发 `X-User-Id`、`X-Username`、`X-User-Role`。
-   - 在 `common` 增加全局 Servlet 过滤器 [`UserContextFilter.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/context/UserContextFilter.java)，从请求头提取用户信息并注入当前线程 `UserContext`，请求结束在 `finally` 强制清理。
-   - 增强 [`FeignTraceInterceptor.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java)，跨微服务 RPC 调用时自动将 `UserContext` 注入 Feign 请求头继续透传。
-   - 订单服务与购物车服务（[`OrderController.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/controller/OrderController.java)、[`CartController.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/controller/CartController.java)）直接优先读取 `UserContext.getUserIdOrDefault(2L)`，实现免参数传递，兼顾未登录演示兼容。
+   - 在 `common` 增加全局 Servlet 过滤器 [`UserContextFilter.java`](../common/src/main/java/com/aimall/common/context/UserContextFilter.java)，从请求头提取用户信息并注入当前线程 `UserContext`，请求结束在 `finally` 强制清理。
+   - 增强 [`FeignTraceInterceptor.java`](../common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java)，跨微服务 RPC 调用时自动将 `UserContext` 注入 Feign 请求头继续透传。
+   - 订单服务与购物车服务（[`OrderController.java`](../order-service/src/main/java/com/aimall/order/controller/OrderController.java)、[`CartController.java`](../order-service/src/main/java/com/aimall/order/controller/CartController.java)）直接优先读取 `UserContext.getUserIdOrDefault(2L)`，实现免参数传递，兼顾未登录演示兼容。
 
 2. **Sentinel 限流/熔断统一 429 优雅响应 (Task 3)**：
    - 在各业务服务（`order-service`、`product-service`）实现 `CustomBlockExceptionHandler`（基于 Spring Boot 3 标准 `com.alibaba.csp.sentinel.adapter.spring.webmvc_v6x.callback.BlockExceptionHandler`）。
    - 细分区分流控规则 (`FlowException`)、降级规则 (`DegradeException`)、热点参数 (`ParamFlowException`)、系统保护 (`SystemBlockException`) 与权限黑白名单 (`AuthorityException`)。
    - 遇到限流时设置 HTTP 响应码为 `429 Too Many Requests`，返回规范 JSON：`{"code": 429, "message": "当前访问排队人数过多，已被限流保护，请稍候重试"}`。
-   - 在 [`GlobalExceptionHandler.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/exception/GlobalExceptionHandler.java) 增加对 `BlockException` 及其 AOP 包装类的递归解析，双层保险杜绝 500 误报。
+   - 在 [`GlobalExceptionHandler.java`](../common/src/main/java/com/aimall/common/exception/GlobalExceptionHandler.java) 增加对 `BlockException` 及其 AOP 包装类的递归解析，双层保险杜绝 500 误报。
 
 ---
 
 ## 二、代码结构与核心改动
 
 ### 1. `common` 基础支撑库
-- [`UserContext.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/context/UserContext.java):
+- [`UserContext.java`](../common/src/main/java/com/aimall/common/context/UserContext.java):
   增加 `getUserIdOrDefault(Long defaultUserId)` 兜底读取方法。
-- [`UserContextFilter.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/context/UserContextFilter.java):
+- [`UserContextFilter.java`](../common/src/main/java/com/aimall/common/context/UserContextFilter.java):
   最高优先级 Servlet Filter，从请求头抓取并注入线程上下文，在 `finally` 中执行 `UserContext.clear()` 杜绝线程池污染。
-- [`FeignTraceInterceptor.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java):
+- [`FeignTraceInterceptor.java`](../common/src/main/java/com/aimall/common/trace/FeignTraceInterceptor.java):
   除了原有的 `X-Trace-Id` 透传外，将 `UserContext` 的 `X-User-Id` / `X-Username` / `X-User-Role` 自动注入 Feign 请求头。
-- [`GlobalExceptionHandler.java`](file:///d:/Javacode/ai-mall-platform/common/src/main/java/com/aimall/common/exception/GlobalExceptionHandler.java):
+- [`GlobalExceptionHandler.java`](../common/src/main/java/com/aimall/common/exception/GlobalExceptionHandler.java):
   递归检测异常根因中的 `BlockException`，命中时设置状态码 429 并返回限流友好提示。
 
 ### 2. `order-service` 订单服务
-- [`CustomBlockExceptionHandler.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/config/CustomBlockExceptionHandler.java):
+- [`CustomBlockExceptionHandler.java`](../order-service/src/main/java/com/aimall/order/config/CustomBlockExceptionHandler.java):
   实现 WebMvc-v6x 的 `BlockExceptionHandler` 接口，接管 URL 限流阻塞响应。
-- [`OrderController.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/controller/OrderController.java):
+- [`OrderController.java`](../order-service/src/main/java/com/aimall/order/controller/OrderController.java):
   重构 `/order/create`、`/order/seckill/create`、`/order/list`，优先使用 `UserContext.getUserIdOrDefault(userId != null ? userId : 2L)`。
-- [`CartController.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/controller/CartController.java):
+- [`CartController.java`](../order-service/src/main/java/com/aimall/order/controller/CartController.java):
   所有购物车操作（加购、查车、改数、选勾、删除、清空、结算）全面使用 `UserContext`。
 
 ### 3. `product-service` 商品服务
-- [`CustomBlockExceptionHandler.java`](file:///d:/Javacode/ai-mall-platform/product-service/src/main/java/com/aimall/product/config/CustomBlockExceptionHandler.java):
+- [`CustomBlockExceptionHandler.java`](../product-service/src/main/java/com/aimall/product/config/CustomBlockExceptionHandler.java):
   实现商品微服务维度的 Sentinel 429 阻塞响应。
 
 ---

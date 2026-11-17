@@ -23,12 +23,12 @@
 ### 1. 缓存击穿 (Cache Breakdown) 防护
 
 #### (1) L1 进程级合并：Caffeine 原生 Single-Flight 互斥
-在 `order-service` 的 [`ProductCaffeineCacheService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java) 中：
+在 `order-service` 的 [`ProductCaffeineCacheService.java`](../order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java) 中：
 - 使用 `caffeineCache.get(productId, id -> ...)` 方法。
 - **底层原理**：Caffeine 底层针对同一个 Key 的加载操作自带锁机制。当多个线程同时请求同一个未命中的 Key 时，仅有 1 个线程会执行加载回调（RPC 请求），其余线程在 JVM 内存中阻塞等待该结果，从进程入口层直接消除了击穿流量。
 
 #### (2) L2 分布式互斥：Redisson 分布式锁 + DCL（双重检查锁定）
-在 `product-service` 的 [`ProductService.java`](file:///d:/Javacode/ai-mall-platform/product-service/src/main/java/com/aimall/product/service/ProductService.java) 中：
+在 `product-service` 的 [`ProductService.java`](../product-service/src/main/java/com/aimall/product/service/ProductService.java) 中：
 ```java
 // 1. 先查 Redis 缓存
 String json = redisTemplate.opsForValue().get(cacheKey);
@@ -106,10 +106,10 @@ if (product == null || product.getStatus() != 1) {
 
 ## 三、 涉及代码清单
 
-1. [`ProductService.java`](file:///d:/Javacode/ai-mall-platform/product-service/src/main/java/com/aimall/product/service/ProductService.java):
+1. [`ProductService.java`](../product-service/src/main/java/com/aimall/product/service/ProductService.java):
    - 增加 Redisson 分布式锁 `lock:product:detail:{id}`
    - 增加 DCL 双重检查锁定逻辑与自旋重试机制
    - 增加随机 TTL 扰动（3600 + 60~900 秒）
    - 增加 `__NULL__` 空值哨兵拦截与短 TTL 缓存
-2. [`ProductCaffeineCacheService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java):
+2. [`ProductCaffeineCacheService.java`](../order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java):
    - L1 Caffeine 进程内 Single-Flight 互斥与 W-TinyLFU 高命中防护

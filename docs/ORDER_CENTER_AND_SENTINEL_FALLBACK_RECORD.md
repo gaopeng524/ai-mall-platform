@@ -3,12 +3,12 @@
 > **记录时间**: 2026-10-14  
 > **核心模块**: `frontend` (React + TypeScript + Tailwind) / `order-service` (Spring Cloud Alibaba + OpenFeign + Sentinel)  
 > **修改文件**:
-> - 前端订单中心抽屉: [`OrderDrawer.tsx`](file:///d:/Javacode/ai-mall-platform/frontend/src/components/OrderDrawer.tsx)
-> - 实体日期格式化: [`Order.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/entity/Order.java)
-> - Sentinel 降级工厂: [`ProductRemoteClientFallbackFactory.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/client/ProductRemoteClientFallbackFactory.java)
-> - Feign 客户端配置: [`ProductRemoteClient.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/client/ProductRemoteClient.java)
-> - 缓存降级适配: [`ProductCaffeineCacheService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java)
-> - 订单服务配置: [`application.yml`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/resources/application.yml)
+> - 前端订单中心抽屉: [`OrderDrawer.tsx`](../frontend/src/components/OrderDrawer.tsx)
+> - 实体日期格式化: [`Order.java`](../order-service/src/main/java/com/aimall/order/entity/Order.java)
+> - Sentinel 降级工厂: [`ProductRemoteClientFallbackFactory.java`](../order-service/src/main/java/com/aimall/order/client/ProductRemoteClientFallbackFactory.java)
+> - Feign 客户端配置: [`ProductRemoteClient.java`](../order-service/src/main/java/com/aimall/order/client/ProductRemoteClient.java)
+> - 缓存降级适配: [`ProductCaffeineCacheService.java`](../order-service/src/main/java/com/aimall/order/cache/ProductCaffeineCacheService.java)
+> - 订单服务配置: [`application.yml`](../order-service/src/main/resources/application.yml)
 
 ---
 
@@ -114,11 +114,11 @@ private LocalDateTime createdAt;
 
 - **后端配置报错 (DataSource url not specified)**:
   - **根本原因**: 在配置 `feign.sentinel.enabled: true` 时，`feign:` 声明在顶层，导致其下方的 `datasource:` 与 `data:` 被错误解析为 `feign.datasource` 与 `feign.data`，Spring 无法找到 `spring.datasource.url`。
-  - **修复方案**: 纠正 [`application.yml`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/resources/application.yml) 缩进，确保 `datasource` 与 `data` 严格位于 `spring:` 层级之下，`feign` 独立置于下层。重新复制配置至 `target/classes` 并编译验证通过。
+  - **修复方案**: 纠正 [`application.yml`](../order-service/src/main/resources/application.yml) 缩进，确保 `datasource` 与 `data` 严格位于 `spring:` 层级之下，`feign` 独立置于下层。重新复制配置至 `target/classes` 并编译验证通过。
 
 - **前端白屏报错 (Minified React Error #310 / Rules of Hooks 违反)**:
   - **错误现象**: 点击「我的订单」抽屉时页面瞬间白屏（`Root innerHTML length: 0`）。
-  - **根本原因**: [`OrderDrawer.tsx`](file:///d:/Javacode/ai-mall-platform/frontend/src/components/OrderDrawer.tsx) 中在第 92 行声明了条件提前返回 `if (!isOpen) return null;`，而后续在第 245、258 行使用了 `useMemo(counts)` 和 `useMemo(filteredOrders)`。抽屉关闭时 React 执行了前 15 个 Hook，打开时执行了 17 个 Hook，严重违反 React Hook 规则，触发 React #310 异常并卸载整个 Root 组件树。
+  - **根本原因**: [`OrderDrawer.tsx`](../frontend/src/components/OrderDrawer.tsx) 中在第 92 行声明了条件提前返回 `if (!isOpen) return null;`，而后续在第 245、258 行使用了 `useMemo(counts)` 和 `useMemo(filteredOrders)`。抽屉关闭时 React 执行了前 15 个 Hook，打开时执行了 17 个 Hook，严重违反 React Hook 规则，触发 React #310 异常并卸载整个 Root 组件树。
   - **修复方案**: 将 `useMemo` 等全部 Hook 提升至组件最顶部无条件执行，并将 `if (!isOpen) return null;` 移至最终 JSX 渲染之前。同时对 `order.price` 和 `order.totalAmount` 增加 `Number(...) || 0` 防御。重新构建部署至 Docker 容器并通过 CDP 自动化无头浏览器验证（`hasDrawer: true`, 0 exceptions）。
 
 ---
