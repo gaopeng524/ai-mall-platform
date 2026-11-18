@@ -33,7 +33,7 @@ class ConfirmOrderDraftIdempotencyTest {
     private OrderFeignClient orderFeignClient;
     private RedisFallbackManager redis;
     private ObjectMapper objectMapper;
-    private AiShoppingService service;
+    private OrderDraftConfirmService service;
 
     /** 内存版 Redis：草稿 + 确认锁 */
     private final Map<String, String> drafts = new ConcurrentHashMap<>();
@@ -45,7 +45,7 @@ class ConfirmOrderDraftIdempotencyTest {
         orderFeignClient = mock(OrderFeignClient.class);
         redis = mock(RedisFallbackManager.class);
         objectMapper = new ObjectMapper();
-        service = new AiShoppingService(null, productFeignClient, orderFeignClient, null, null, objectMapper, null, redis, null);
+        service = new OrderDraftConfirmService(productFeignClient, orderFeignClient, redis, objectMapper);
 
         when(redis.getOrderDraft(anyString())).thenAnswer(i -> drafts.get(i.<String>getArgument(0)));
         doAnswer(i -> drafts.put(i.getArgument(0), i.getArgument(1))).when(redis).putOrderDraft(anyString(), anyString(), any(Duration.class));
