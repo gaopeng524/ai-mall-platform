@@ -31,17 +31,39 @@ import java.util.List;
 @Component
 public class JwtAuthGlobalFilter implements GlobalFilter, Ordered {
 
-    @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
+    @Value("${jwt.secret:${JWT_SECRET:}}")
     private String secret;
+
+    /**
+     * 启动时校验 JWT 密钥：必须显式配置。网关是整个系统的鉴权入口，仓库又是公开的，
+     * 用默认密钥部署等于任何人都能伪造登录凭证，所以不再提供默认值。
+     * （网关不依赖 common 模块，这里与 common 的 SecuritySecrets 保持同样的规则。）
+     */
+    @jakarta.annotation.PostConstruct
+    void validateSecret() {
+        if (!StringUtils.hasText(secret)) {
+            throw new IllegalStateException("未配置 JWT_SECRET：请设置环境变量 JWT_SECRET（至少 32 个字符的随机串，"
+                    + "所有服务使用同一个值）。可用 `openssl rand -base64 48` 生成，参见 .env.example。");
+        }
+        secret = secret.trim();
+        if ("aimall-platform-secret-key-must-be-32-bytes!".equals(secret)) {
+            throw new IllegalStateException("JWT_SECRET 不能使用仓库里公开过的默认值，请换成自己生成的随机串。");
+        }
+        if (secret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException("JWT_SECRET 太短：至少需要 32 字节。");
+        }
+    }
 
     /** 严禁外部网关直接调用的内部微服务 RPC 端点与 serviceId 路径（仅允许内部网络 Feign 互通） */
     private static final List<String> INTERNAL_BLOCKED_PATHS = List.of(
             "/**/product/pre-deduct-stock",
             "/**/product/sync-deduct-stock",
+            "/**/product/batch-deduct-stock",
             "/**/product/rollback-pre-stock",
             "/**/product/deduct-stock",
             "/**/product/rollback-stock",
             "/**/order/pay-callback",
+            "/**/user/internal/**",
             "/*-service/**"
     );
 

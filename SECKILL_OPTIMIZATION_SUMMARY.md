@@ -86,11 +86,11 @@ flowchart TD
 
 | 功能模块 | 文件路径 | 核心机制 |
 | :--- | :--- | :--- |
-| **秒杀下单服务** | [`order-service/.../OrderService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/service/OrderService.java) | Super Lua + asyncSend + Semaphore(5000) 背压 + 定时对账兜底 |
-| **异步落库消费者** | [`order-service/.../OrderConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderConsumer.java) | 32 消费线程并发入库 + 投递 10s 延迟关单消息 |
+| **秒杀下单服务** | [`order-service/.../OrderService.java`](order-service/src/main/java/com/aimall/order/service/OrderService.java) | Super Lua + asyncSend + Semaphore(5000) 背压 + 定时对账兜底 |
+| **异步落库消费者** | [`order-service/.../OrderConsumer.java`](order-service/src/main/java/com/aimall/order/mq/OrderConsumer.java) | 32 消费线程并发入库 + 投递 10s 延迟关单消息 |
 | **扣库任务 worker** | [`order-service/.../StockDeductWorker.java`](order-service/src/main/java/com/aimall/order/stock/StockDeductWorker.java) | SKIP LOCKED 批量领取、按商品合并、批次号幂等、超时整批重领 |
-| **超时关单消费者** | [`order-service/.../OrderTimeoutConsumer.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/mq/OrderTimeoutConsumer.java) | CAS 状态校验 + Redis/MySQL 双向库存回滚 |
-| **服务配置** | [`order-service/.../application.yml`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/resources/application.yml) | Tomcat 1000 线程池、RocketMQ 延迟级别 3 (10s) |
+| **超时关单消费者** | [`order-service/.../OrderTimeoutConsumer.java`](order-service/src/main/java/com/aimall/order/mq/OrderTimeoutConsumer.java) | CAS 状态校验 + Redis/MySQL 双向库存回滚 |
+| **服务配置** | [`order-service/.../application.yml`](order-service/src/main/resources/application.yml) | Tomcat 1000 线程池、RocketMQ 延迟级别 3 (10s) |
 
 ---
 
@@ -121,7 +121,7 @@ DESC: [TIMEOUT_CLEAN_QUEUE]broker busy, start flow control for a while, period i
   - **后台定时扫表任务**：作为 **0.02% 漏网异常的终极确定性对账底线**。
 
 ### 4. 解决方案与代码落地
-在 [`OrderService.java`](file:///d:/Javacode/ai-mall-platform/order-service/src/main/java/com/aimall/order/service/OrderService.java) 中新增 `@Scheduled(fixedDelay = 10000)` 定时对账兜底任务：
+在 [`OrderService.java`](order-service/src/main/java/com/aimall/order/service/OrderService.java) 中新增 `@Scheduled(fixedDelay = 10000)` 定时对账兜底任务：
 ```java
 @Scheduled(fixedDelay = 10000)
 public void scanAndCloseTimeoutOrders() {

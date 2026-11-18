@@ -13,7 +13,7 @@
   2. **`products`**：旁路直接向前端推送匹配商品的结构化数据，前端直接在消息气泡末尾渲染出带图片、价格、库存和一键下单按钮的可交互商品卡片；
   3. **`chunk`**：平滑文本打字机流，完整保留 Markdown 换行符与代码缩进。
 - **补全缺失核心类**：
-  - 补充了原包漏掉的 [`AiToolExecutionContext.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/context/AiToolExecutionContext.java)，基于 `InheritableThreadLocal` 与并发会话注册表，解决 Spring AI 异步工具回调线程的 `UserContext` 身份注入与 SSE 实时事件发射问题。
+  - 补充了原包漏掉的 [`AiToolExecutionContext.java`](../ai-service/src/main/java/com/aimall/ai/context/AiToolExecutionContext.java)，基于 `InheritableThreadLocal` 与并发会话注册表，解决 Spring AI 异步工具回调线程的 `UserContext` 身份注入与 SSE 实时事件发射问题。
 
 ### 2.2 Redis + 内存双层会话记忆 (`AiShoppingService.java`)
 - 引入 `Redis` 统一维护多轮对话历史，设置 30 分钟滑动过期时间（TTL）；

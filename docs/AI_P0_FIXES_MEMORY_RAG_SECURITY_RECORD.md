@@ -20,7 +20,7 @@
 ## 二、 修复方案与代码落地
 
 ### 2.1 修复一：多轮历史记忆真正喂入大模型
-- **代码位置**：[`AiShoppingService.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java)
+- **代码位置**：[`AiShoppingService.java`](../ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java)
 - **改造点**：
   1. 调用 `loadSessionHistory(sessionId)` 获取滑动窗口裁剪后的历史会话；
   2. 在 `chatClient.prompt()` 请求构建时，显式调用 `.messages(history)` 将历史对话切片传递给通义千问；
@@ -31,8 +31,8 @@
 
 ### 2.2 修复二：落地 RAG 灌库与在售商品知识同步服务
 - **代码位置**：
-  - 服务实现：[`KnowledgeService.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/service/KnowledgeService.java)
-  - 管理接口：[`AiKnowledgeController.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/controller/AiKnowledgeController.java)
+  - 服务实现：[`KnowledgeService.java`](../ai-service/src/main/java/com/aimall/ai/service/KnowledgeService.java)
+  - 管理接口：[`AiKnowledgeController.java`](../ai-service/src/main/java/com/aimall/ai/controller/AiKnowledgeController.java)
 - **改造点**：
   1. **ApplicationRunner 启动自检与异步热加载**：服务启动后探针检测 pgvector 是否已构建 HNSW 索引，若为空则自动异步灌入；
   2. **专业对标与导购知识库**：灌入 24 款商品“旗舰标杆 vs 高性价比平替”对比矩阵（䨻科技轻弹、Hi-Res 双金标、PAW3395 传感器、白鹅绒防风等）以及商城 5 分钟超时关单、秒杀防超卖等业务规则切片；
@@ -43,10 +43,10 @@
 
 ### 2.3 修复三：写操作鉴权拦截 + 消除全局竞态变量
 - **代码位置**：
-  - 上下文管理器：[`AiToolExecutionContext.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/context/AiToolExecutionContext.java)
-  - 控制层：[`AiChatController.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/controller/AiChatController.java)
-  - 核心服务：[`AiShoppingService.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java)
-  - 微服务工具集：[`MallTools.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/tool/MallTools.java)
+  - 上下文管理器：[`AiToolExecutionContext.java`](../ai-service/src/main/java/com/aimall/ai/context/AiToolExecutionContext.java)
+  - 控制层：[`AiChatController.java`](../ai-service/src/main/java/com/aimall/ai/controller/AiChatController.java)
+  - 核心服务：[`AiShoppingService.java`](../ai-service/src/main/java/com/aimall/ai/service/AiShoppingService.java)
+  - 微服务工具集：[`MallTools.java`](../ai-service/src/main/java/com/aimall/ai/tool/MallTools.java)
 - **改造点**：
   1. **彻底拔除 `LATEST_SESSION` 静态兜底**：严格基于 `InheritableThreadLocal`；若当前线程无上下文，直接拒绝跨会话获取，从源头杜绝串流与会话越权；
   2. **拔除未登录静默兜底 `2L`**：
@@ -60,7 +60,7 @@
 ---
 
 ### 2.4 修复四：优化购物车文本格式与事件类型修正
-- **代码位置**：[`MallTools.java`](file:///d:/Javacode/ai-mall-platform/ai-service/src/main/java/com/aimall/ai/tool/MallTools.java)
+- **代码位置**：[`MallTools.java`](../ai-service/src/main/java/com/aimall/ai/tool/MallTools.java)
 - **改造点**：
   1. `getCartList()` 不再直接返回粗糙的 `Map.toString()`，改为结构化明细（总件数、勾选件数、总金额、商品明细与勾选状态），降低 Token 消耗并提升大模型理解准确度；
   2. 修正工具执行事件类型：

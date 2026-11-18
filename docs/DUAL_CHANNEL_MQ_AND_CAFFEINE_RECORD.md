@@ -136,6 +136,6 @@
    - 在 Redis 中预热秒杀库存：`SET stock:count:7 50`，`SET stock:count:8 100`。
 4. **卡片大片空白与纵向拉伸缺陷根因排查与修复**：
    - **根因**：第三张卡片（华为 Mate 60 Pro）的 Unsplash 竖版长图高达几千像素，因 `aspect-16/10` 并非 Tailwind 内置类导致高度失效，图片被纵向撑爆至 700px；CSS Grid 默认 `align-items: stretch` 把同行其他卡片强制拉高，外层 `justify-between` 导致卡片内部出现大面积空白断层。
-   - **修复**：在 [`ProductCard.tsx`](file:///d:/Javacode/ai-mall-platform/frontend/src/components/ProductCard.tsx) 中显式约束图片容器为 `h-44 sm:h-48 w-full shrink-0 overflow-hidden`，在 [`ProductList.tsx`](file:///d:/Javacode/ai-mall-platform/frontend/src/components/ProductList.tsx) 网格加上 `items-start`，彻底根除异常拉伸，全场卡片高度整齐紧凑。
+   - **修复**：在 [`ProductCard.tsx`](../frontend/src/components/ProductCard.tsx) 中显式约束图片容器为 `h-44 sm:h-48 w-full shrink-0 overflow-hidden`，在 [`ProductList.tsx`](../frontend/src/components/ProductList.tsx) 网格加上 `items-start`，彻底根除异常拉伸，全场卡片高度整齐紧凑。
 
 

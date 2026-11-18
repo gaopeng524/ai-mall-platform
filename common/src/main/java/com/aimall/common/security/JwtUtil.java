@@ -3,13 +3,11 @@ package com.aimall.common.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
 /**
@@ -19,14 +17,15 @@ import java.util.Date;
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret:aimall-platform-secret-key-must-be-32-bytes!}")
-    private String secret;
+    /** 密钥统一由 SecuritySecrets 校验并提供（不再有默认值） */
+    @org.springframework.beans.factory.annotation.Autowired
+    private SecuritySecrets securitySecrets;
 
     @Value("${jwt.expiration:86400000}")
     private long expiration; // 默认 24 小时
 
     private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        return securitySecrets.jwtKey();
     }
 
     /**
