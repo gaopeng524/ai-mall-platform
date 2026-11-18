@@ -76,7 +76,8 @@ class SecuritySecretsTest {
     @Test
     @DisplayName("Spring 容器：没有 JWT_SECRET 启动失败，错误信息指明怎么配置")
     void contextFailsWithoutSecret() {
-        contextRunner.run(ctx -> {
+        // 显式置空：开发机和 CI 上通常设置了 JWT_SECRET 环境变量，不能让它影响这个用例
+        contextRunner.withPropertyValues("jwt.secret=", "JWT_SECRET=").run(ctx -> {
             assertNotNull(ctx.getStartupFailure());
             Throwable root = org.springframework.core.NestedExceptionUtils.getMostSpecificCause(ctx.getStartupFailure());
             assertInstanceOf(IllegalStateException.class, root);
